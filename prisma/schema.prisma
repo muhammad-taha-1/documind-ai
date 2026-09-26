@@ -58,19 +58,24 @@ model VerificationToken {
 }
 
 model Document {
-  id        String          @id @default(cuid())
-  title     String
-  fileName  String
-  fileSize  Int
-  mimeType  String          @default("application/pdf")
-  filePath  String
-  pageCount Int?
-  status    DocumentStatus  @default(UPLOADING)
-  userId    String
-  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  chunks    DocumentChunk[]
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  id             String          @id @default(cuid())
+  title          String
+  fileName       String
+  fileSize       Int
+  mimeType       String          @default("application/pdf")
+  filePath       String
+  pageCount      Int?
+  status         DocumentStatus  @default(UPLOADING)
+  /// Why processing failed, shown to the user (e.g. "image-only PDF")
+  errorMessage   String?
+  /// Progress counters for the embedding step ("Embedding 15/45 chunks...")
+  totalChunks    Int             @default(0)
+  embeddedChunks Int             @default(0)
+  userId         String
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chunks         DocumentChunk[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@index([userId])
 }
@@ -84,14 +89,21 @@ enum DocumentStatus {
 }
 
 model DocumentChunk {
-  id         String   @id @default(cuid())
-  content    String   @db.Text
+  id         String                       @id @default(cuid())
+  content    String                       @db.Text
   pageNumber Int?
   chunkIndex Int
   tokenCount Int?
   documentId String
-  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
+  document   Document                     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  /// 1536 dimensions = OpenAI text-embedding-3-small. Prisma can't read or write
+  /// vector columns through its query API, but declaring the column as Unsupported
+  /// keeps it in the schema so `migrate dev` doesn't treat it as drift.
+  /// Read/write it with $queryRaw / $executeRaw. Deliberately unindexed: exact
+  /// search is fast at this scale and, unlike HNSW, stays correct when results
+  /// are filtered by user/document (see spec, Phase 2).
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                     @default(now())
 
   @@index([documentId])
 }
@@ -120,6 +132,8 @@ model Message {
   sourceChunkIds String[]
   toolCalls      Json?
   toolResults    Json?
+  /// Vision attachments (Phase 14), e.g. [{ type: "image", path, mediaType }]
+  attachments    Json?
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])

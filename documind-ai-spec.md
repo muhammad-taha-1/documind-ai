@@ -171,7 +171,7 @@ Scaffold the Next.js project and install all dependencies.
 
 5. Create a `.env.example` file with placeholder values for GitHub documentation.
 
-6. Create `docker-compose.yml` for PostgreSQL + pgvector (see Phase 15 for the file) and a `vitest.config.ts` with the `@/` alias. Add `"test": "vitest run"` to `package.json` scripts.
+6. Create `docker-compose.yml` for PostgreSQL + pgvector (see Phase 15 for the file) and `vitest.config.mts` (unit) + `vitest.integration.config.mts` (database tests) with the `@/` alias. Add `test`, `test:integration` and `db:*` scripts to `package.json`.
 
 ### Deliverable
 A clean Next.js project with all dependencies installed, folder structure created, and environment variables configured. The app should run with `npm run dev` without errors (just showing the default page). `npx tsc --noEmit`, `npm run lint`, and `npm test` all pass.
@@ -355,21 +355,20 @@ pgvector is a PostgreSQL extension that adds vector data types and similarity se
    npx prisma migrate dev --name init
    ```
 
-5. Add the vector index in its own migration. Prisma can't express vector indexes in the schema, so create an empty migration and write the SQL yourself — this keeps it in migration history instead of a side script:
-   ```bash
-   npx prisma migrate dev --create-only --name add_embedding_hnsw_index
-   ```
-   Put this in the generated `migration.sql`, then run `npx prisma migrate dev`:
-   ```sql
-   CREATE INDEX IF NOT EXISTS "DocumentChunk_embedding_idx"
-     ON "DocumentChunk" USING hnsw (embedding vector_cosine_ops);
-   ```
-   **Why HNSW, not IVFFlat?** IVFFlat builds its clusters from the rows that exist when the index is created — build it on an empty table and recall is poor until you rebuild it. HNSW works well at any size and needs no tuning, so it's the better default.
+5. **No vector index (deliberately).** Without an index, pgvector does an exact nearest-neighbour scan, which has perfect recall and takes milliseconds at this project's scale (thousands of chunks). Two reasons not to add HNSW/IVFFlat here:
+   - **Filtered search:** our queries filter by `userId` and `documentIds`. Approximate indexes find the nearest K vectors *first* and filter *after*, so a query scoped to one user's documents can return fewer than K results — or none. Exact search has no such problem.
+   - **Prisma can't declare vector indexes.** An index created in a hand-written migration isn't in `schema.prisma`, so the next `migrate dev` generates `DROP INDEX` and silently removes it.
 
-6. The Prisma client singleton (`src/lib/db/prisma.ts`) was created in Phase 1 using the `PrismaPg` driver adapter (required by Prisma 7). Verify it connects.
+   If you ever need one (roughly 100k+ chunks), put vectors in a separate Postgres schema that Prisma doesn't manage, and look at pgvector's iterative index scans for filtered queries.
+
+6. Update the Prisma client singleton (`src/lib/db/prisma.ts`) to pass the connection string to `PrismaPg` directly, so the adapter owns the pool and `$disconnect()` closes it.
+
+7. Write an integration test (`src/lib/db/pgvector.integration.test.ts`, run with `npm run test:integration`) that uses hand-made 1536-dim vectors with known cosine similarities (no API credits needed). It should prove that writing via `$executeRaw` works, that `$queryRaw` search returns correct ordering and scores, that unembedded chunks are skipped, that another user's chunks are never returned, and that deletes cascade.
+
+**Gotcha:** `prisma migrate dev` prompts for a migration name when the schema has changed, and hangs in non-interactive shells. Always pass `--name`.
 
 ### Deliverable
-Database fully set up with all tables, the `embedding vector(1536)` column on DocumentChunk, and an HNSW index for fast similarity search. `npx prisma migrate status` reports no drift.
+Database fully set up with all tables and the `embedding vector(1536)` column on DocumentChunk. `npx prisma migrate status` reports up to date, `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` prints an empty migration (no drift), and the integration tests pass.
 
 ---
 
