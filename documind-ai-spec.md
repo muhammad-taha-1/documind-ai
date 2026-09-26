@@ -25,23 +25,24 @@ By building this project, you will gain hands-on experience with:
 
 | Layer | Technology |
 |---|---|
-| Framework | Next.js 14+ (App Router, Server Actions, Route Handlers) |
+| Framework | Next.js 16 (App Router, Server Actions, Route Handlers) — note: `middleware.ts` is now `proxy.ts` |
 | Language | TypeScript |
-| Database | PostgreSQL + pgvector extension |
-| ORM | Prisma |
-| Auth | NextAuth.js (GitHub or Google provider) |
+| Database | PostgreSQL + pgvector extension (Docker: `pgvector/pgvector:pg16`) |
+| ORM | Prisma 7 (driver adapter `@prisma/adapter-pg`, client generated to `src/generated/prisma`) |
+| Auth | NextAuth.js v4 (GitHub provider, JWT session strategy) |
+| Testing | Vitest (unit tests for chunker, context builder, tool execution) |
 | AI (LLM) | Anthropic Claude API (`@anthropic-ai/sdk`) |
 | AI (Embeddings) | OpenAI Embeddings API (`text-embedding-3-small`) — Anthropic doesn't offer an embedding model, so we use OpenAI just for this. It costs ~$0.02 per million tokens, essentially free for learning. |
-| Streaming | Vercel AI SDK (`ai` package) for streaming helpers |
-| PDF Parsing | `pdf-parse` for text extraction |
+| Streaming | Anthropic SDK's native `messages.stream()` piped into a web `ReadableStream` (no extra streaming library — you learn the mechanics directly) |
+| PDF Parsing | `pdf-parse` v2 (`PDFParse` class — ships its own types, gives real per-page text) |
 | UI | Tailwind CSS + shadcn/ui |
 | File Upload | Local filesystem (uploadthing or manual with formdata) |
 
 ## Environment Variables
 
 ```env
-# Database
-DATABASE_URL="postgresql://user:password@localhost:5432/documind?schema=public"
+# Database (matches docker-compose.yml)
+DATABASE_URL="postgresql://documind:documind@localhost:5432/documind?schema=public"
 
 # Auth
 NEXTAUTH_URL="http://localhost:3000"
@@ -73,18 +74,21 @@ Scaffold the Next.js project and install all dependencies.
 2. Install core dependencies:
    ```bash
    # AI SDKs
-   npm install @anthropic-ai/sdk ai openai
+   npm install @anthropic-ai/sdk openai
 
-   # Database
-   npm install prisma @prisma/client
+   # Database (Prisma 7 needs a driver adapter)
+   npm install prisma @prisma/client @prisma/adapter-pg pg dotenv
+   npm install -D @types/pg
    npm install pgvector  # pgvector support for Prisma raw queries
 
    # Auth
-   npm install next-auth@4
+   npm install next-auth@4 @auth/prisma-adapter
 
-   # PDF Processing
+   # PDF Processing (v2 ships its own types — do NOT install @types/pdf-parse, those are for v1)
    npm install pdf-parse
-   npm install @types/pdf-parse --save-dev
+
+   # Testing
+   npm install -D vitest
 
    # UI Components
    npx shadcn@latest init
@@ -167,8 +171,13 @@ Scaffold the Next.js project and install all dependencies.
 
 5. Create a `.env.example` file with placeholder values for GitHub documentation.
 
+6. Create `docker-compose.yml` for PostgreSQL + pgvector (see Phase 15 for the file) and a `vitest.config.ts` with the `@/` alias. Add `"test": "vitest run"` to `package.json` scripts.
+
 ### Deliverable
-A clean Next.js project with all dependencies installed, folder structure created, and environment variables configured. The app should run with `npm run dev` without errors (just showing the default page).
+A clean Next.js project with all dependencies installed, folder structure created, and environment variables configured. The app should run with `npm run dev` without errors (just showing the default page). `npx tsc --noEmit`, `npm run lint`, and `npm test` all pass.
+
+### Testing Convention (applies to every phase)
+Every phase ends with: `npx tsc --noEmit`, `npm run lint`, `npm test`, plus a manual check of the phase deliverable. Pure logic (chunker, context builder, tool execution, citation parsing) gets `*.test.ts` unit tests next to the source file.
 
 ---
 
@@ -182,27 +191,24 @@ pgvector is a PostgreSQL extension that adds vector data types and similarity se
 
 ### Steps
 
-1. Initialize Prisma:
+1. Start the database (Docker Desktop must be running):
    ```bash
-   npx prisma init
+   docker compose up -d
    ```
 
-2. Enable pgvector in PostgreSQL. Create a migration SQL file or run manually:
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS vector;
-   ```
+2. pgvector is enabled by the `extensions = [vector]` line in the datasource below — Prisma writes `CREATE EXTENSION IF NOT EXISTS "vector"` into the first migration for you.
 
-3. Define the Prisma schema (`prisma/schema.prisma`):
+3. Define the Prisma schema (`prisma/schema.prisma`). Prisma 7 reads the connection URL from `prisma7.config.ts`, not from the schema:
 
    ```prisma
    generator client {
-     provider        = "prisma-client-js"
+     provider        = "prisma-client"
+     output          = "../src/generated/prisma"
      previewFeatures = ["postgresqlExtensions"]
    }
 
    datasource db {
      provider   = "postgresql"
-     url        = env("DATABASE_URL")
      extensions = [vector]
    }
 
@@ -264,6 +270,9 @@ pgvector is a PostgreSQL extension that adds vector data types and similarity se
      filePath    String          // where the file is stored on disk
      pageCount   Int?
      status      DocumentStatus  @default(UPLOADING)
+     errorMessage    String?     // why processing failed (e.g. "image-only PDF")
+     totalChunks     Int         @default(0) // for "Embedding 15/45 chunks..." progress
+     embeddedChunks  Int         @default(0)
      userId      String
      user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
      chunks      DocumentChunk[]
@@ -289,8 +298,11 @@ pgvector is a PostgreSQL extension that adds vector data types and similarity se
      tokenCount Int?                     // approximate token count
      documentId String
      document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-     // embedding is stored via raw SQL since Prisma doesn't natively support vector type
-     // We'll use: embedding vector(1536) — 1536 dimensions for text-embedding-3-small
+     // Prisma can't read/write vector columns through its normal API, but declaring it as
+     // Unsupported keeps it in the schema so `migrate dev` doesn't see it as drift and
+     // offer to reset the database. Reads/writes go through $queryRaw / $executeRaw.
+     // 1536 dimensions = text-embedding-3-small
+     embedding  Unsupported("vector(1536)")?
      createdAt  DateTime @default(now())
 
      @@index([documentId])
@@ -324,6 +336,8 @@ pgvector is a PostgreSQL extension that adds vector data types and similarity se
      // For tool calls
      toolCalls      Json?        // store tool call data
      toolResults    Json?        // store tool results
+     // For vision (Phase 14) — e.g. [{ type: "image", path: "...", mediaType: "image/png" }]
+     attachments    Json?
      createdAt      DateTime     @default(now())
 
      @@index([conversationId])
@@ -336,34 +350,26 @@ pgvector is a PostgreSQL extension that adds vector data types and similarity se
    }
    ```
 
-4. After migration, add the vector column via raw SQL (since Prisma doesn't support the vector type natively). Create a file `prisma/migrations/add_vector_column.sql`:
-   ```sql
-   ALTER TABLE "DocumentChunk" ADD COLUMN IF NOT EXISTS embedding vector(1536);
-   CREATE INDEX IF NOT EXISTS "DocumentChunk_embedding_idx" ON "DocumentChunk" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-   ```
-   
-   Run this after `npx prisma migrate dev`. Or include it in a custom migration.
-
-5. Create the Prisma client singleton (`src/lib/db/prisma.ts`):
-   ```typescript
-   import { PrismaClient } from '@prisma/client'
-
-   const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
-
-   export const prisma = globalForPrisma.prisma || new PrismaClient()
-
-   if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
-   ```
-
-6. Run the migration:
+4. Run the initial migration (creates tables, the extension, and the `embedding` column):
    ```bash
    npx prisma migrate dev --name init
-   # Then run the raw SQL for the vector column
-   npx prisma db execute --file prisma/migrations/add_vector_column.sql
    ```
 
+5. Add the vector index in its own migration. Prisma can't express vector indexes in the schema, so create an empty migration and write the SQL yourself — this keeps it in migration history instead of a side script:
+   ```bash
+   npx prisma migrate dev --create-only --name add_embedding_hnsw_index
+   ```
+   Put this in the generated `migration.sql`, then run `npx prisma migrate dev`:
+   ```sql
+   CREATE INDEX IF NOT EXISTS "DocumentChunk_embedding_idx"
+     ON "DocumentChunk" USING hnsw (embedding vector_cosine_ops);
+   ```
+   **Why HNSW, not IVFFlat?** IVFFlat builds its clusters from the rows that exist when the index is created — build it on an empty table and recall is poor until you rebuild it. HNSW works well at any size and needs no tuning, so it's the better default.
+
+6. The Prisma client singleton (`src/lib/db/prisma.ts`) was created in Phase 1 using the `PrismaPg` driver adapter (required by Prisma 7). Verify it connects.
+
 ### Deliverable
-Database fully set up with all tables, the vector column on DocumentChunk, and an IVFFlat index for fast similarity search.
+Database fully set up with all tables, the `embedding vector(1536)` column on DocumentChunk, and an HNSW index for fast similarity search. `npx prisma migrate status` reports no drift.
 
 ---
 
@@ -377,15 +383,13 @@ Since you've done this before in your SaaS starter kit, keep this phase quick. J
 
 ### Steps
 
-1. Install the Prisma adapter:
-   ```bash
-   npm install @auth/prisma-adapter
-   ```
+1. `@auth/prisma-adapter` was installed in Phase 1. Create a GitHub OAuth app (free) at github.com → Settings → Developer settings → OAuth Apps, with callback URL `http://localhost:3000/api/auth/callback/github`.
 
 2. Configure NextAuth in `src/lib/auth.ts`:
-   - Use the PrismaAdapter
-   - Add GitHub provider (or Google — your choice)
-   - Include user ID in the session via callbacks
+   - Use the PrismaAdapter (stores users/accounts in the DB)
+   - Set `session: { strategy: "jwt" }` — with an adapter the default is database sessions, which the route-protection proxy can't read (it only sees the cookie/JWT)
+   - Add GitHub provider
+   - Include user ID in the session via the `jwt` and `session` callbacks
 
 3. Create the API route `src/app/api/auth/[...nextauth]/route.ts`.
 
@@ -393,7 +397,8 @@ Since you've done this before in your SaaS starter kit, keep this phase quick. J
    - Clean minimal design with a "Sign in with GitHub" button
    - Redirect to dashboard after login
 
-5. Create middleware (`src/middleware.ts`) to protect `/dashboard`, `/chat`, and `/documents` routes — redirect to `/login` if not authenticated.
+5. Create `src/proxy.ts` (Next.js 16 renamed `middleware.ts` → `proxy.ts`; read `node_modules/next/dist/docs/01-app/01-getting-started/16-proxy.md`) to protect `/dashboard`, `/chat`, and `/documents` routes — redirect to `/login` if not authenticated. Use next-auth's `withAuth` and export it as `proxy`.
+   - The proxy is only a first gate. Every API route must still call `getServerSession()` and check ownership of whatever it reads/writes.
 
 6. Create a `SessionProvider` wrapper in a client component and add it to the root layout.
 
@@ -452,30 +457,39 @@ LLMs work with text, not binary PDF data. We need to pull the readable text out 
 
 ### Steps
 
-1. Create the PDF parser (`src/lib/documents/parser.ts`):
+1. Create the PDF parser (`src/lib/documents/parser.ts`) using the pdf-parse **v2** API:
    ```typescript
-   import pdf from 'pdf-parse';
+   import { PDFParse } from 'pdf-parse';
    import fs from 'fs/promises';
+
+   export interface ParsedPage {
+     pageNumber: number;
+     text: string;
+   }
 
    export interface ParsedDocument {
      text: string;
      pageCount: number;
-     pages: string[]; // text per page
+     pages: ParsedPage[];
    }
 
    export async function parsePDF(filePath: string): Promise<ParsedDocument> {
-     const dataBuffer = await fs.readFile(filePath);
-     const data = await pdf(dataBuffer);
-     
-     return {
-       text: data.text,
-       pageCount: data.numpages,
-       pages: [], // pdf-parse gives full text; for per-page, we'll approximate
-     };
+     const data = await fs.readFile(filePath);
+     const parser = new PDFParse({ data });
+     try {
+       const result = await parser.getText();
+       return {
+         text: result.text,
+         pageCount: result.total,
+         pages: result.pages.map((p) => ({ pageNumber: p.num, text: p.text })),
+       };
+     } finally {
+       await parser.destroy(); // release the underlying pdf.js document
+     }
    }
    ```
 
-2. Enhance the parser to attempt per-page text extraction. `pdf-parse` provides a `pagerender` option you can use, or you can split on page break patterns. Keep it simple — approximate page boundaries are fine.
+2. v2 gives exact per-page text, so page numbers on chunks will be accurate (no approximation needed). If every page's text is empty, the PDF is probably scanned images — set status `ERROR` with `errorMessage: "No extractable text — this PDF may be image-only"`.
 
 3. Create a processing API route `src/app/api/documents/[id]/process/route.ts` (POST):
    - Load the document record, verify ownership
@@ -592,11 +606,11 @@ We use OpenAI's `text-embedding-3-small` model (1536 dimensions) because:
 
    export async function storeChunkEmbedding(chunkId: string, embedding: number[]) {
      const vectorString = `[${embedding.join(',')}]`;
-     await prisma.$executeRawUnsafe(
-       `UPDATE "DocumentChunk" SET embedding = $1::vector WHERE id = $2`,
-       vectorString,
-       chunkId
-     );
+     // Tagged-template $executeRaw parameterizes every ${} value — never use the
+     // *Unsafe variants with string-built SQL.
+     await prisma.$executeRaw`
+       UPDATE "DocumentChunk" SET embedding = ${vectorString}::vector WHERE id = ${chunkId}
+     `;
    }
    ```
 
@@ -610,32 +624,36 @@ We use OpenAI's `text-embedding-3-small` model (1536 dimensions) because:
    - Handle errors: if embedding fails for some chunks, retry; if persistent failure, set status to `ERROR`
 
 4. Integrate into the processing pipeline:
-   - After chunking (Phase 6), trigger embedding generation
-   - Show progress on the document card (e.g., "Embedding 15/45 chunks...")
+   - After chunking (Phase 6), set `totalChunks` and trigger embedding generation
+   - Increment `embeddedChunks` after each batch
+   - Show progress on the document card (e.g., "Embedding 15/45 chunks...") from those two fields
 
-5. Create a vector search function:
+5. Create a vector search function. **It must filter by `userId`** — `documentIds` ultimately comes from the client, and without this a user could pass someone else's document IDs and read their content:
    ```typescript
+   import type { DocumentChunkResult } from '@/types';
+
    export async function searchSimilarChunks(
      queryEmbedding: number[],
      documentIds: string[],
-     limit: number = 5,
-     threshold: number = 0.7
-   ) {
+     userId: string,
+     limit: number = 5
+   ): Promise<DocumentChunkResult[]> {
      const vectorString = `[${queryEmbedding.join(',')}]`;
-     const results = await prisma.$queryRawUnsafe(`
+     return prisma.$queryRaw<DocumentChunkResult[]>`
        SELECT dc.id, dc.content, dc."pageNumber", dc."chunkIndex", dc."documentId",
-              d.title as "documentTitle",
-              1 - (dc.embedding <=> $1::vector) as similarity
+              d.title AS "documentTitle",
+              1 - (dc.embedding <=> ${vectorString}::vector) AS similarity
        FROM "DocumentChunk" dc
        JOIN "Document" d ON dc."documentId" = d.id
-       WHERE dc."documentId" = ANY($2::text[])
+       WHERE dc."documentId" = ANY(${documentIds}::text[])
+         AND d."userId" = ${userId}
          AND dc.embedding IS NOT NULL
-       ORDER BY dc.embedding <=> $1::vector
-       LIMIT $3
-     `, vectorString, documentIds, limit);
-     return results;
+       ORDER BY dc.embedding <=> ${vectorString}::vector
+       LIMIT ${limit}
+     `;
    }
    ```
+   Filtering by similarity threshold happens in the RAG pipeline (Phase 10), not here — that keeps this function a pure "top K nearest" search.
 
 ### Deliverable
 All document chunks have vector embeddings stored in pgvector. The `searchSimilarChunks` function can find the most relevant chunks for any query. Document status shows `READY` when complete.
@@ -702,7 +720,7 @@ The app should feel like a focused productivity tool — clean, minimal, not fla
    - "Start Chat" button creates a new conversation and redirects to `/chat/[id]`
 
 8. Create the conversation CRUD API routes:
-   - `POST /api/chat/conversations` — create a new conversation (body: `{ documentIds: string[] }`)
+   - `POST /api/chat/conversations` — create a new conversation (body: `{ documentIds: string[] }`). Validate the body with zod, then verify **every** `documentId` belongs to the current user (`prisma.document.count({ where: { id: { in: ids }, userId } })` must equal `ids.length`) — reject with 403 otherwise. Same check applies when adding documents mid-conversation (Phase 12).
    - `GET /api/chat/conversations` — list user's conversations
    - `GET /api/chat/conversations/[id]` — get conversation with messages
    - `DELETE /api/chat/conversations/[id]` — delete a conversation
@@ -720,7 +738,7 @@ Integrate Claude's Messages API for basic chat with real-time streaming response
 ### Key Concept — Streaming
 Without streaming, the user sends a message and waits 5-15 seconds staring at a blank screen before the full response appears. With streaming, tokens appear one by one in real-time as Claude generates them — just like ChatGPT and claude.ai. This is critical for UX.
 
-We use the Anthropic SDK's native streaming support combined with the Vercel AI SDK's `StreamingTextResponse` helper for the HTTP layer.
+We use the Anthropic SDK's native streaming support and pipe the text deltas into a standard web `ReadableStream` returned from the Route Handler. (The Vercel AI SDK's old `StreamingTextResponse` helper no longer exists, and doing it by hand teaches you what those helpers hide.)
 
 ### Steps
 
@@ -775,15 +793,33 @@ We use the Anthropic SDK's native streaming support combined with the Vercel AI 
 
    Implementation approach:
    ```typescript
-   const stream = await anthropic.messages.stream({
-     model: 'claude-sonnet-4-20250514',
-     max_tokens: 4096,
+   const stream = anthropic.messages.stream({
+     model: CHAT_MODEL, // from src/lib/ai/anthropic.ts — see "Models" in Important Notes
+     max_tokens: 16000,
      system: SYSTEM_PROMPT,
-     messages: conversationHistory, // properly formatted
+     messages: conversationHistory, // Anthropic.MessageParam[]
    });
 
-   // Convert the Anthropic stream to a ReadableStream for the response
-   // Use TransformStream or the Vercel AI SDK's helpers
+   const encoder = new TextEncoder();
+   const body = new ReadableStream<Uint8Array>({
+     async start(controller) {
+       stream.on('text', (delta) => controller.enqueue(encoder.encode(delta)));
+       try {
+         const final = await stream.finalMessage(); // full message + usage
+         // save assistant message (content, model, usage) to the DB here
+         controller.close();
+       } catch (err) {
+         controller.error(err);
+       }
+     },
+     cancel() {
+       stream.abort(); // client navigated away — stop paying for tokens
+     },
+   });
+
+   return new Response(body, {
+     headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+   });
    ```
 
 4. Handle the streaming on the client side. Create a custom `useChat` hook (`src/hooks/useChat.ts`):
@@ -831,21 +867,28 @@ This is the most important pattern in modern AI applications. It lets Claude ans
 
 1. Create the RAG pipeline (`src/lib/ai/rag.ts`):
    ```typescript
+   // Starting point for text-embedding-3-small. Its cosine similarities run lower than
+   // you'd expect — clearly relevant chunks often score 0.3–0.6, rarely above 0.7.
+   // Tune these by logging scores for real questions against your own documents.
+   export const MIN_SIMILARITY = 0.3;
+   export const LOW_CONFIDENCE_SIMILARITY = 0.45;
+
    export async function ragPipeline(
      query: string,
      documentIds: string[],
-     options?: { topK?: number; similarityThreshold?: number }
-   ): Promise<{
-     context: string;
-     sourceChunks: Array<{ id: string; content: string; documentTitle: string; pageNumber?: number; similarity: number }>;
-   }> {
+     userId: string,
+     options?: { topK?: number; minSimilarity?: number }
+   ): Promise<{ context: string; sourceChunks: DocumentChunkResult[] }> {
      const topK = options?.topK ?? 5;
+     const minSimilarity = options?.minSimilarity ?? MIN_SIMILARITY;
 
      // Step 1: Embed the query
      const queryEmbedding = await generateEmbedding(query);
 
-     // Step 2: Search for similar chunks
-     const similarChunks = await searchSimilarChunks(queryEmbedding, documentIds, topK);
+     // Step 2: Search for similar chunks (scoped to this user), drop weak matches
+     const similarChunks = (
+       await searchSimilarChunks(queryEmbedding, documentIds, userId, topK)
+     ).filter((chunk) => chunk.similarity >= minSimilarity);
 
      // Step 3: Build context string
      const context = similarChunks
@@ -894,8 +937,9 @@ This is the most important pattern in modern AI applications. It lets Claude ans
    - Make this section collapsible (collapsed by default, showing count)
 
 6. Add a relevance indicator:
-   - If no chunks meet the similarity threshold (~0.7), tell the user the documents might not contain relevant information
-   - If chunks have low similarity (0.5-0.7), add a caveat that the information might not be directly relevant
+   - If no chunks meet `MIN_SIMILARITY` (~0.3), tell the user the documents might not contain relevant information
+   - If the best chunk is below `LOW_CONFIDENCE_SIMILARITY` (~0.45), add a caveat that the information might not be directly relevant
+   - These numbers are model-specific starting points — log real scores and adjust
 
 ### Deliverable
 When users ask questions, the app finds relevant document chunks via vector search, injects them as context, and Claude answers with citations. Source cards show exactly which parts of which documents were used. This is the core RAG experience.
@@ -988,9 +1032,11 @@ This often requires a **multi-step loop**: send message → get tool call → ex
 
 2. Implement the tool execution functions (`src/lib/ai/tools.ts`):
    ```typescript
+   // toolInput is `unknown` on purpose: validate it with a zod schema per tool
+   // before using it — the model's arguments are untrusted input like any request body.
    export async function executeTool(
      toolName: string,
-     toolInput: Record<string, any>,
+     toolInput: unknown,
      documentIds: string[],
      userId: string
    ): Promise<string> {
@@ -1016,35 +1062,46 @@ This often requires a **multi-step loop**: send message → get tool call → ex
 3. Update the chat API route to support tool calling with a **tool use loop**:
    ```typescript
    // The tool calling loop:
+   const MAX_TOOL_ITERATIONS = 5; // guard against a runaway loop
+
    let response = await anthropic.messages.create({
-     model: 'claude-sonnet-4-20250514',
-     max_tokens: 4096,
+     model: CHAT_MODEL,
+     max_tokens: 16000,
      system: RAG_SYSTEM_PROMPT,
      tools: TOOLS,
      messages: conversationHistory,
    });
 
-   // Check if Claude wants to use a tool
-   while (response.stop_reason === 'tool_use') {
-     const toolUseBlock = response.content.find(block => block.type === 'tool_use');
-     
-     // Execute the tool
-     const toolResult = await executeTool(
-       toolUseBlock.name,
-       toolUseBlock.input,
-       documentIds,
-       userId
+   let iterations = 0;
+   while (response.stop_reason === 'tool_use' && iterations++ < MAX_TOOL_ITERATIONS) {
+     // Claude can call SEVERAL tools in one turn (parallel tool use). Every
+     // tool_use block needs a matching tool_result, or the next request is a 400.
+     const toolUseBlocks = response.content.filter(
+       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
      );
 
-     // Send tool result back to Claude
+     const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
+       toolUseBlocks.map(async (block) => {
+         try {
+           const content = await executeTool(block.name, block.input, documentIds, userId);
+           return { type: 'tool_result', tool_use_id: block.id, content };
+         } catch (err) {
+           // Report failures to Claude instead of dropping the result
+           const message = err instanceof Error ? err.message : 'Tool failed';
+           return { type: 'tool_result', tool_use_id: block.id, content: message, is_error: true };
+         }
+       })
+     );
+
+     // Append the full assistant content, then ALL results in ONE user message
      conversationHistory.push(
        { role: 'assistant', content: response.content },
-       { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: toolResult }] }
+       { role: 'user', content: toolResults }
      );
 
      response = await anthropic.messages.create({
-       model: 'claude-sonnet-4-20250514',
-       max_tokens: 4096,
+       model: CHAT_MODEL,
+       max_tokens: 16000,
        system: RAG_SYSTEM_PROMPT,
        tools: TOOLS,
        messages: conversationHistory,
@@ -1212,7 +1269,9 @@ This is a simpler integration than RAG but an important skill — sending multim
 
 3. Store image references:
    - Save uploaded images to `./uploads/{userId}/images/{messageId}.{ext}`
-   - Store the file path in the message metadata
+   - Store the file path in the message's `attachments` JSON field (added in Phase 2), e.g. `[{ type: "image", path, mediaType }]`
+   - Serve images through an authenticated route (e.g. `GET /api/attachments/[messageId]`) that checks ownership — never expose the `uploads/` folder publicly
+   - When rebuilding history for later turns, re-read the image from disk and re-attach it (the API is stateless), or replace it with a text placeholder like `[image: chart.png]` to save tokens
    - Display the image inline in the chat message bubble
 
 4. Update `MessageBubble` to render inline images:
@@ -1312,9 +1371,8 @@ Production-quality error handling, loading states, responsive design, and prepar
 
 7. **Environment & Config**:
    - `.env.example` with all required variables (no real keys)
-   - Docker Compose file for PostgreSQL with pgvector:
+   - Docker Compose file for PostgreSQL with pgvector (created in Phase 1 — `version:` is obsolete in Compose v2 and omitted):
      ```yaml
-     version: '3.8'
      services:
        db:
          image: pgvector/pgvector:pg16
@@ -1373,5 +1431,11 @@ A polished, production-quality application ready to push to GitHub. Clean README
 
 - **API Keys**: You need BOTH an Anthropic API key (for Claude chat) and an OpenAI API key (for embeddings only). Claude Pro subscription does NOT include API access — sign up separately at console.anthropic.com and platform.openai.com.
 - **pgvector**: Use the `pgvector/pgvector:pg16` Docker image or install the extension on your existing PostgreSQL. Cloud providers like Supabase and Neon have pgvector built in.
-- **Cost**: For learning/development, expect to spend $1-5 total on API calls. Embeddings are near-free. Claude Sonnet is ~$3/million input tokens.
-- **Models**: Use `claude-sonnet-4-20250514` for the best balance of quality and cost. You can swap to `claude-haiku-4-5-20241022` for faster/cheaper responses during development.
+- **Credits timeline**: No API credits are needed until Phase 7. Phases 1–6 and Phase 8 (UI) run entirely on local services (Docker Postgres, GitHub OAuth, filesystem). Phase 7 needs the OpenAI key (embeddings); Phase 9 onward needs the Anthropic key. If you're waiting on credits, you can build Phase 8 before Phase 7.
+- **Cost**: For learning/development, expect a few dollars total. Both consoles require a $5 minimum credit purchase. Embeddings are near-free (~$0.02/million tokens).
+- **Models**: Define the model ID once as `CHAT_MODEL` in `src/lib/ai/anthropic.ts` so it's a one-line change. Current options (per million tokens, input/output):
+  - `claude-opus-5` — $5 / $25 — most capable
+  - `claude-sonnet-5` — $2 / $10 — strong and cheaper
+  - `claude-haiku-4-5` — $1 / $5 — fastest/cheapest; good for development and for small jobs like title generation
+  Use exact IDs as written (no date suffixes). Model IDs change over time — check the Anthropic models docs before starting Phase 9.
+- **Alternative embeddings**: Voyage AI (Anthropic's recommended embeddings partner) has a generous free tier. If you switch, change `vector(1536)` to that model's dimension **before** Phase 2's migration.
