@@ -445,6 +445,15 @@ Build the document upload flow — drag & drop UI, file validation, storage to d
 
 6. Add a `.gitignore` entry for the `uploads/` directory.
 
+### Implementation notes
+- **Validate content, not labels.** The MIME type and extension are chosen by the client; the server checks for the `%PDF-` signature (`src/lib/documents/validation.ts`, shared with the client for fast feedback).
+- **Bound the body before reading it.** Route handlers have no body size limit and `request.formData()` buffers everything, so the route rejects a missing (411) or oversized (413) `Content-Length` first.
+- **No orphans.** The document ID is a UUID generated before the insert, so the file is written to its final path first; if the insert fails, the file is deleted.
+- **`filePath` is a storage key** (`{userId}/{documentId}.pdf`, relative to `UPLOAD_DIR`, default `./uploads`), resolved by `src/lib/documents/storage.ts`, which refuses keys that escape the upload root. Moving the folder needs no data migration.
+- **Responses use `DocumentSummary`** (`src/types`) via an explicit Prisma `select` — `filePath`/`userId` never leave the server.
+- The dashboard Server Component reads the list with `listDocuments()` directly (no HTTP round trip); `useDocuments` takes over on the client. Upload progress uses `XMLHttpRequest`, since `fetch` has no upload-progress events.
+- The "trigger processing" step is wired in Phase 5 — until then, new documents stay `UPLOADING` (shown as a static "Uploaded" badge — the file is stored and waiting for processing).
+
 ### Deliverable
 Users can upload PDF files via drag & drop, files are saved to disk, and document records appear in the dashboard with status indicators.
 

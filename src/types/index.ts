@@ -1,15 +1,22 @@
-export enum DocumentStatus {
-  UPLOADING = "UPLOADING",
-  PROCESSING = "PROCESSING",
-  EMBEDDING = "EMBEDDING",
-  READY = "READY",
-  ERROR = "ERROR",
-}
+// Enums come from Prisma's generated enums file, which is safe to import in
+// client components (it has no database code), so they can't drift from the schema.
+import type { DocumentStatus, MessageRole } from "@/generated/prisma/enums";
 
-export enum MessageRole {
-  USER = "user",
-  ASSISTANT = "assistant",
-  SYSTEM = "system",
+export { DocumentStatus, MessageRole } from "@/generated/prisma/enums";
+
+/** A document as the API and UI see it — no server file paths. */
+export interface DocumentSummary {
+  id: string;
+  title: string;
+  fileName: string;
+  fileSize: number;
+  pageCount: number | null;
+  status: DocumentStatus;
+  errorMessage: string | null;
+  totalChunks: number;
+  embeddedChunks: number;
+  /** ISO 8601 — a string so it survives JSON responses unchanged */
+  createdAt: string;
 }
 
 export interface DocumentChunkResult {
