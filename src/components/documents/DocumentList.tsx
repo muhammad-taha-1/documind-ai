@@ -2,7 +2,13 @@ import { Files } from "lucide-react";
 import type { DocumentSummary } from "@/types";
 import { DocumentCard } from "./DocumentCard";
 
-export function DocumentList({ documents }: { documents: DocumentSummary[] }) {
+export function DocumentList({
+  documents,
+  onRetry,
+}: {
+  documents: DocumentSummary[];
+  onRetry: (documentId: string) => Promise<void>;
+}) {
   if (documents.length === 0) {
     return (
       <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed px-6 py-12 text-center">
@@ -19,7 +25,7 @@ export function DocumentList({ documents }: { documents: DocumentSummary[] }) {
     <ul className="grid gap-3 sm:grid-cols-2">
       {documents.map((document) => (
         <li key={document.id}>
-          <DocumentCard document={document} />
+          <DocumentCard document={document} onRetry={onRetry} />
         </li>
       ))}
     </ul>

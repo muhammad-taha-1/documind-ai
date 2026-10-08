@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { after } from "next/server";
 import { jsonError } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db/prisma";
+import { claimDocumentForProcessing, runProcessing } from "@/lib/documents/processing";
 import { documentSummarySelect, listDocuments, toDocumentSummary } from "@/lib/documents/queries";
 import { deleteFile, documentStorageKey, saveFile } from "@/lib/documents/storage";
 import {
@@ -11,6 +13,7 @@ import {
   sanitizeFileName,
   titleFromFileName,
 } from "@/lib/documents/validation";
+import type { DocumentSummary } from "@/types";
 
 // Room for the multipart boundaries and headers around the file itself
 const MULTIPART_OVERHEAD = 64 * 1024;
@@ -80,8 +83,9 @@ export async function POST(request: Request) {
     return jsonError(500, "Could not save the file. Please try again.");
   }
 
+  let document: DocumentSummary;
   try {
-    const document = await prisma.document.create({
+    const row = await prisma.document.create({
       data: {
         id: documentId,
         title: titleFromFileName(fileName),
@@ -93,7 +97,7 @@ export async function POST(request: Request) {
       },
       select: documentSummarySelect,
     });
-    return Response.json({ document: toDocumentSummary(document) }, { status: 201 });
+    document = toDocumentSummary(row);
   } catch (error) {
     console.error("Failed to create document record", error);
     await deleteFile(filePath).catch((cleanupError: unknown) => {
@@ -101,4 +105,20 @@ export async function POST(request: Request) {
     });
     return jsonError(500, "Could not save the document. Please try again.");
   }
+
+  // Start processing once the response has been sent. Doing it server-side
+  // (rather than having the browser call /process) means processing still
+  // happens if the user closes the tab right after uploading.
+  after(async () => {
+    try {
+      if ((await claimDocumentForProcessing(documentId, userId)) === "claimed") {
+        await runProcessing(documentId);
+      }
+    } catch (error) {
+      // The document stays UPLOADING; POST /api/documents/:id/process restarts it
+      console.error(`Could not start processing document ${documentId}`, error);
+    }
+  });
+
+  return Response.json({ document }, { status: 201 });
 }

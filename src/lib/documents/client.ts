@@ -1,16 +1,7 @@
-import type { ApiError } from "@/lib/api";
+import { parseApiError } from "@/lib/api";
 import type { DocumentSummary } from "@/types";
 
 const GENERIC_ERROR = "Upload failed. Please try again.";
-
-function errorMessageFrom(responseText: string): string {
-  try {
-    const body = JSON.parse(responseText) as Partial<ApiError>;
-    return typeof body.error === "string" ? body.error : GENERIC_ERROR;
-  } catch {
-    return GENERIC_ERROR;
-  }
-}
 
 /**
  * Uploads a PDF to POST /api/documents and resolves with the created document.
@@ -37,7 +28,7 @@ export function uploadDocument(
         const body = JSON.parse(xhr.responseText) as { document: DocumentSummary };
         resolve(body.document);
       } else {
-        reject(new Error(errorMessageFrom(xhr.responseText)));
+        reject(new Error(parseApiError(xhr.responseText, GENERIC_ERROR)));
       }
     };
     xhr.onerror = () => reject(new Error("Network error — check your connection and try again."));
@@ -46,4 +37,14 @@ export function uploadDocument(
     formData.append("file", file);
     xhr.send(formData);
   });
+}
+
+/** Asks the server to retry processing a failed document. Rejects with a displayable Error. */
+export async function retryProcessing(documentId: string): Promise<void> {
+  const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}/process`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(parseApiError(await response.text(), "Couldn't retry. Please try again."));
+  }
 }

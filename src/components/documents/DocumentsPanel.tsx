@@ -7,7 +7,7 @@ import { DocumentUpload } from "./DocumentUpload";
 
 /** Upload zone + document list, sharing one piece of client state. */
 export function DocumentsPanel({ initialDocuments }: { initialDocuments: DocumentSummary[] }) {
-  const { documents, addDocument } = useDocuments(initialDocuments);
+  const { documents, addDocument, retry } = useDocuments(initialDocuments);
 
   return (
     <div className="grid gap-8">
@@ -16,7 +16,7 @@ export function DocumentsPanel({ initialDocuments }: { initialDocuments: Documen
         <h2 className="text-sm font-medium text-muted-foreground">
           Your documents{documents.length > 0 && ` (${documents.length})`}
         </h2>
-        <DocumentList documents={documents} />
+        <DocumentList documents={documents} onRetry={retry} />
       </section>
     </div>
   );

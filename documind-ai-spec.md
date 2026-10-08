@@ -514,6 +514,17 @@ LLMs work with text, not binary PDF data. We need to pull the readable text out 
 
 4. Wire up: after a successful upload in Phase 4, automatically trigger processing.
 
+### Implementation notes
+- **Add `serverExternalPackages: ["pdf-parse"]` to `next.config.ts`.** pdf.js loads its worker from a separate file at runtime; bundling leaves that file behind and every parse fails in `next build` output with "Setting up fake worker failed". Tests and plain Node don't show this — only the production build does.
+- **Build the full text from `pages`, not `result.text`** — the latter inserts `-- 1 of 3 --` markers that would end up inside chunks.
+- `parsePdf(bytes)` takes bytes instead of a path (testable, storage-agnostic). Known pdf.js errors (`InvalidPDFException`, `PasswordException`, `FormatError`) become a `PdfParseError` with a user-facing message; anything else is rethrown and logged, so environment bugs aren't blamed on the user's file.
+- **Processing starts server-side** via `after()` in the upload route, so it still runs if the user closes the tab. `POST /api/documents/[id]/process` is for retries (202 Accepted; 409 if already running; 404 for other users' documents).
+- **Atomic claim:** `claimDocumentForProcessing` is one conditional `UPDATE … WHERE status IN (UPLOADING, ERROR) AND userId = …`, so concurrent requests can't start the pipeline twice.
+- `runProcessing` never throws — failures land on the document as `ERROR` + `errorMessage`. Error cards show a **Retry** button.
+- `useDocuments` polls `GET /api/documents` every 2 s while any document is UPLOADING/PROCESSING/EMBEDDING, and drops poll results that started before a local change.
+- Until Phase 6 lands, documents stop at `PROCESSING` with `pageCount` set.
+- Known gap: a server restart mid-processing leaves a document stuck in PROCESSING. Handle stale claims in Phase 15.
+
 ### Deliverable
 Uploaded PDFs are parsed and their text content is extracted. The document status progresses from `UPLOADING` to `PROCESSING`.
 

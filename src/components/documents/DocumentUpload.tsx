@@ -4,7 +4,7 @@ import { CircleAlert, CircleCheck, CloudUpload, FileText } from "lucide-react";
 import { type DragEvent, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-import { uploadDocument } from "@/lib/documents/upload-client";
+import { uploadDocument } from "@/lib/documents/client";
 import { PDF_MIME_TYPE, validateSelectedFile } from "@/lib/documents/validation";
 import type { DocumentSummary } from "@/types";
 

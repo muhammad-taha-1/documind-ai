@@ -5,7 +5,10 @@ import path from "node:path";
 // any future download/view route must check ownership first.
 // UPLOAD_DIR lets tests (and deployments) point somewhere other than ./uploads.
 function uploadRoot(): string {
-  return path.resolve(process.env.UPLOAD_DIR ?? "uploads");
+  // turbopackIgnore: this is runtime data, not code. Without it, Next's build
+  // can't tell which files this path reaches and traces the whole project
+  // (uploads included) into the deployment output.
+  return path.resolve(/* turbopackIgnore: true */ process.env.UPLOAD_DIR ?? "uploads");
 }
 
 /**

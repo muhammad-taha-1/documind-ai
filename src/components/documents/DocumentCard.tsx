@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatBytes } from "@/lib/format";
 import type { DocumentStatus, DocumentSummary } from "@/types";
+import { RetryButton } from "./RetryButton";
 
 const STATUS_BADGES: Record<
   DocumentStatus,
@@ -36,7 +37,13 @@ function StatusBadge({ document }: { document: DocumentSummary }) {
   );
 }
 
-export function DocumentCard({ document }: { document: DocumentSummary }) {
+export function DocumentCard({
+  document,
+  onRetry,
+}: {
+  document: DocumentSummary;
+  onRetry: (documentId: string) => Promise<void>;
+}) {
   const details = [
     document.pageCount !== null &&
       `${document.pageCount} ${document.pageCount === 1 ? "page" : "pages"}`,
@@ -64,8 +71,13 @@ export function DocumentCard({ document }: { document: DocumentSummary }) {
             </time>
             {details.map((detail) => ` · ${detail}`).join("")}
           </p>
-          {document.status === "ERROR" && document.errorMessage && (
-            <p className="text-xs text-destructive">{document.errorMessage}</p>
+          {document.status === "ERROR" && (
+            <div className="mt-1 grid gap-2">
+              {document.errorMessage && (
+                <p className="text-xs text-destructive">{document.errorMessage}</p>
+              )}
+              <RetryButton onRetry={() => onRetry(document.id)} />
+            </div>
           )}
         </div>
       </CardContent>

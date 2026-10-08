@@ -6,6 +6,7 @@ import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/prisma";
 import { MAX_FILE_SIZE } from "@/lib/documents/validation";
+import { makePdf } from "@/test/pdf";
 import type { DocumentSummary } from "@/types";
 
 // Replace the real session lookup (which needs a request cookie) with one the
@@ -13,9 +14,16 @@ import type { DocumentSummary } from "@/types";
 const getSession = vi.hoisted(() => vi.fn<() => Promise<Session | null>>());
 vi.mock("@/lib/auth", () => ({ getSession }));
 
+// after() needs a live Next.js request; collect the callbacks so tests can run them
+const scheduled = vi.hoisted(() => [] as Array<() => unknown>);
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (callback: () => unknown) => scheduled.push(callback),
+}));
+
 const { GET, POST } = await import("./route");
 
-const PDF_BYTES = new TextEncoder().encode("%PDF-1.7\n% test document\n%%EOF");
+const PDF_BYTES = makePdf(["Hello from page one", "And page two"]);
 
 function signInAs(userId: string | null) {
   getSession.mockResolvedValue(
@@ -64,6 +72,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await prisma.document.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
   await rm(uploadRoot, { recursive: true, force: true });
+  scheduled.length = 0;
   signInAs(ownerId);
 });
 
@@ -105,6 +114,19 @@ describe("POST /api/documents", () => {
     expect(new Uint8Array(saved)).toEqual(PDF_BYTES);
   });
 
+  it("starts processing after responding", async () => {
+    const response = await POST(await uploadRequest(new Blob([PDF_BYTES])));
+    const { document } = (await response.json()) as { document: DocumentSummary };
+    expect(scheduled).toHaveLength(1);
+
+    await scheduled[0]();
+
+    expect(await prisma.document.findUniqueOrThrow({ where: { id: document.id } })).toMatchObject({
+      status: "PROCESSING",
+      pageCount: 2,
+    });
+  });
+
   it("ignores directory parts in the uploaded file name", async () => {
     const response = await POST(await uploadRequest(new Blob([PDF_BYTES]), "../../evil.pdf"));
     expect(response.status).toBe(201);
@@ -117,6 +139,7 @@ describe("POST /api/documents", () => {
     const fake = new Blob(["MZ this is an executable"], { type: "application/pdf" });
     const response = await POST(await uploadRequest(fake, "invoice.pdf"));
     expect(response.status).toBe(415);
+    expect(scheduled).toHaveLength(0);
     expect(await response.json()).toEqual({ error: "Only PDF files are supported." });
     expect(await prisma.document.count({ where: { userId: ownerId } })).toBe(0);
     await expect(storedFiles()).rejects.toThrow(); // upload root never created
@@ -158,6 +181,7 @@ describe("POST /api/documents", () => {
 
     expect(response.status).toBe(500);
     expect(await storedFiles()).toEqual([]);
+    expect(scheduled).toHaveLength(0);
     vi.mocked(console.error).mockRestore();
   });
 });
