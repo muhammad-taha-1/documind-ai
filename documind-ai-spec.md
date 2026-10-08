@@ -108,7 +108,8 @@ Scaffold the Next.js project and install all dependencies.
    │   │       └── page.tsx
    │   ├── (dashboard)/
    │   │   ├── layout.tsx
-   │   │   ├── page.tsx              # Dashboard — list documents
+   │   │   ├── dashboard/
+   │   │   │   └── page.tsx          # Dashboard (/dashboard) — list documents
    │   │   ├── documents/
    │   │   │   └── [id]/
    │   │   │       └── page.tsx      # Single document view
@@ -388,16 +389,19 @@ Since you've done this before in your SaaS starter kit, keep this phase quick. J
    - Use the PrismaAdapter (stores users/accounts in the DB)
    - Set `session: { strategy: "jwt" }` — with an adapter the default is database sessions, which the route-protection proxy can't read (it only sees the cookie/JWT)
    - Add GitHub provider
-   - Include user ID in the session via the `jwt` and `session` callbacks
+   - Include user ID in the session via the `session` callback — NextAuth already stores the database `User.id` in the JWT's `sub` claim, so no `jwt` callback is needed. Augment the `Session` type in `src/types/next-auth.d.ts`.
 
 3. Create the API route `src/app/api/auth/[...nextauth]/route.ts`.
 
 4. Create a simple login page at `src/app/(auth)/login/page.tsx`:
    - Clean minimal design with a "Sign in with GitHub" button
    - Redirect to dashboard after login
+   - Sanitize `callbackUrl` (`src/lib/safe-redirect.ts`) — it comes from the query string, so redirecting to it unchecked is an open redirect
+   - The dashboard lives at `src/app/(dashboard)/dashboard/page.tsx` (URL `/dashboard`; route groups add no URL segment). `/` redirects there. Phase 3 adds a placeholder with a sign-out button.
 
 5. Create `src/proxy.ts` (Next.js 16 renamed `middleware.ts` → `proxy.ts`; read `node_modules/next/dist/docs/01-app/01-getting-started/16-proxy.md`) to protect `/dashboard`, `/chat`, and `/documents` routes — redirect to `/login` if not authenticated. Use next-auth's `withAuth` and export it as `proxy`.
-   - The proxy is only a first gate. Every API route must still call `getServerSession()` and check ownership of whatever it reads/writes.
+   - The proxy is only a first gate. Every API route must still call `getSession()` (from `src/lib/auth.ts`, a wrapper around `getServerSession(authOptions)`) and check ownership of whatever it reads/writes.
+   - `withAuth` doesn't read `authOptions`, so pass `pages: { signIn: "/login" }` to it as well.
 
 6. Create a `SessionProvider` wrapper in a client component and add it to the root layout.
 
@@ -432,7 +436,7 @@ Build the document upload flow — drag & drop UI, file validation, storage to d
    - Show processing status with a badge (Uploading → Processing → Embedding → Ready → Error)
    - "Ready" status gets a green badge
 
-4. Create the `DocumentList` component and the dashboard page (`src/app/(dashboard)/page.tsx`):
+4. Create the `DocumentList` component and the dashboard page (`src/app/(dashboard)/dashboard/page.tsx`, replacing the Phase 3 placeholder):
    - List all user's documents
    - Empty state with upload CTA
    - Grid or list layout
