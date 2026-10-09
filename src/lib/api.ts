@@ -7,7 +7,7 @@ export function jsonError(status: number, message: string): Response {
   return Response.json({ error: message } satisfies ApiError, { status });
 }
 
-const MAX_JSON_BODY_BYTES = 16 * 1024;
+const DEFAULT_MAX_JSON_BYTES = 16 * 1024;
 
 /**
  * Reads a small JSON request body. Route handlers have no body size limit
@@ -16,12 +16,13 @@ const MAX_JSON_BODY_BYTES = 16 * 1024;
  */
 export async function readJsonBody(
   request: Request,
+  maxBytes = DEFAULT_MAX_JSON_BYTES,
 ): Promise<{ ok: true; body: unknown } | { ok: false; response: Response }> {
   const contentLength = Number(request.headers.get("content-length"));
   if (!Number.isInteger(contentLength) || contentLength <= 0) {
     return { ok: false, response: jsonError(411, "Content-Length header is required.") };
   }
-  if (contentLength > MAX_JSON_BODY_BYTES) {
+  if (contentLength > maxBytes) {
     return { ok: false, response: jsonError(413, "Request body is too large.") };
   }
   try {

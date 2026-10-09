@@ -6,7 +6,8 @@ import type { ConversationSummary } from "@/types";
 interface ConversationsContextValue {
   /** Most recently active first */
   conversations: ConversationSummary[];
-  addConversation: (conversation: ConversationSummary) => void;
+  /** Adds a conversation, or replaces it if it exists, and moves it to the top */
+  upsertConversation: (conversation: ConversationSummary) => void;
   removeConversation: (conversationId: string) => void;
 }
 
@@ -14,7 +15,7 @@ const ConversationsContext = createContext<ConversationsContextValue | null>(nul
 
 /**
  * The sidebar's conversation list. The server renders the initial list; after
- * that, pages update it here when they create or delete a conversation. (The
+ * that, pages update it here when they create, change or delete a conversation. (The
  * dashboard layout doesn't re-render on navigation, so it can't refresh the
  * list itself.)
  */
@@ -27,7 +28,7 @@ export function ConversationsProvider({
 }) {
   const [conversations, setConversations] = useState(initialConversations);
 
-  const addConversation = useCallback((conversation: ConversationSummary) => {
+  const upsertConversation = useCallback((conversation: ConversationSummary) => {
     setConversations((current) => [
       conversation,
       ...current.filter((existing) => existing.id !== conversation.id),
@@ -39,8 +40,8 @@ export function ConversationsProvider({
   }, []);
 
   const value = useMemo(
-    () => ({ conversations, addConversation, removeConversation }),
-    [conversations, addConversation, removeConversation],
+    () => ({ conversations, upsertConversation, removeConversation }),
+    [conversations, upsertConversation, removeConversation],
   );
   return <ConversationsContext value={value}>{children}</ConversationsContext>;
 }

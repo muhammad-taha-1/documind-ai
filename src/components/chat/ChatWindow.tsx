@@ -17,11 +17,14 @@ const STICK_THRESHOLD = 80;
 export function ChatWindow({
   messages,
   isLoading = false,
+  isStreaming = false,
   emptyState,
 }: {
   messages: ChatMessage[];
   /** Shows a placeholder reply while waiting for the assistant */
   isLoading?: boolean;
+  /** A reply is still arriving. Screen readers wait for it to finish instead of reading every fragment. */
+  isStreaming?: boolean;
   emptyState?: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -36,11 +39,15 @@ export function ChatWindow({
   const lastMessage = messages.at(-1);
   useEffect(() => {
     const element = scrollRef.current;
+    // Sending a message always brings the conversation back into view
+    if (lastMessage?.role === "user") {
+      stickToBottom.current = true;
+    }
     if (element && stickToBottom.current) {
       element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
     }
     // Re-runs when a message is added and as the last one grows (streaming)
-  }, [messages.length, lastMessage?.content, isLoading]);
+  }, [messages.length, lastMessage?.role, lastMessage?.content, isLoading]);
 
   function handleScroll() {
     const element = scrollRef.current;
@@ -65,6 +72,7 @@ export function ChatWindow({
       className="min-h-0 flex-1 overflow-y-auto"
       role="log"
       aria-label="Messages"
+      aria-busy={isStreaming}
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
         {messages.map((message) => (

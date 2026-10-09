@@ -18,7 +18,7 @@ import { useConversations } from "./ConversationsProvider";
 export function NewChatForm() {
   const router = useRouter();
   const { documents } = useDocumentsContext();
-  const { addConversation } = useConversations();
+  const { upsertConversation } = useConversations();
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +43,7 @@ export function NewChatForm() {
     setError(null);
     try {
       const conversation = await createConversation(selectedIds);
-      addConversation(conversation);
+      upsertConversation(conversation);
       router.push(`/chat/${conversation.id}`);
       // Stay pending: the page is about to change
     } catch (startError) {

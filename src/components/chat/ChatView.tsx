@@ -1,32 +1,64 @@
 "use client";
 
-import { FileText } from "lucide-react";
+import { CircleAlert, FileText, X } from "lucide-react";
 import { useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { useChat } from "@/hooks/useChat";
 import type { ChatMessage, ConversationDetail } from "@/types";
 import { ChatInput } from "./ChatInput";
 import { ChatWindow } from "./ChatWindow";
+import { useConversations } from "./ConversationsProvider";
 
 /** A conversation: title, messages, and the input with its documents above it. */
 export function ChatView({ conversation }: { conversation: ConversationDetail }) {
-  const [messages, setMessages] = useState<ChatMessage[]>(conversation.messages);
+  const { conversations, upsertConversation } = useConversations();
+  const { messages, pending, error, dismissError, sendMessage } = useChat({
+    conversationId: conversation.id,
+    initialMessages: conversation.messages,
+    onConversationChange: upsertConversation,
+  });
+  const [draft, setDraft] = useState("");
 
-  function handleSend(content: string) {
-    // TODO(Phase 9): send to POST /api/chat and stream the reply in. Until
-    // then the message only shows locally (it isn't saved).
-    setMessages((current) => [
-      ...current,
-      { id: crypto.randomUUID(), role: "user", content, createdAt: new Date().toISOString() },
-    ]);
+  // The first exchange renames the chat; the sidebar's copy has the latest title
+  const title = conversations.find((c) => c.id === conversation.id)?.title ?? conversation.title;
+
+  async function handleSend(content: string) {
+    const sent = await sendMessage(content);
+    if (!sent) {
+      // Nothing was saved — give the text back, unless they've started typing again
+      setDraft((current) => (current.trim() ? current : content));
+    }
   }
+
+  // The exchange in flight is shown as if saved; the reply bubble appears with its first text
+  const displayed: ChatMessage[] = pending
+    ? [
+        ...messages,
+        pending.userMessage,
+        ...(pending.reply
+          ? [
+              {
+                id: "streaming-reply",
+                role: "assistant" as const,
+                content: pending.reply,
+                createdAt: pending.userMessage.createdAt,
+              },
+            ]
+          : []),
+      ]
+    : messages;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex h-14 shrink-0 items-center border-b px-4">
-        <h1 className="truncate font-medium">{conversation.title}</h1>
+        <h1 className="truncate font-medium">{title}</h1>
       </header>
 
       <ChatWindow
-        messages={messages}
+        messages={displayed}
+        isLoading={pending !== null && !pending.reply}
+        isStreaming={pending !== null}
         emptyState={
           <div className="grid gap-1">
             <p className="font-medium">Ask anything about your documents</p>
@@ -36,6 +68,21 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
       />
 
       <div className="mx-auto grid w-full max-w-3xl gap-2 px-4 pb-4">
+        {error && (
+          <Alert variant="destructive" className="pr-10">
+            <CircleAlert />
+            <AlertDescription>{error}</AlertDescription>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={dismissError}
+              aria-label="Dismiss error"
+              className="absolute top-2 right-2"
+            >
+              <X />
+            </Button>
+          </Alert>
+        )}
         <ul aria-label="Documents in this chat" className="flex flex-wrap gap-1.5">
           {conversation.documents.map((document) => (
             <li
@@ -53,7 +100,12 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
             </li>
           )}
         </ul>
-        <ChatInput onSend={handleSend} />
+        <ChatInput
+          value={draft}
+          onValueChange={setDraft}
+          onSend={handleSend}
+          disabled={pending !== null}
+        />
       </div>
     </div>
   );

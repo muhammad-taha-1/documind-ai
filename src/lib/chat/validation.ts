@@ -24,3 +24,17 @@ export function firstIssueMessage(error: z.ZodError): string {
   const [issue] = error.issues;
   return issue.path.length > 0 ? `${issue.path.join(".")}: ${issue.message}` : issue.message;
 }
+
+/** Longest message a user can send, in characters */
+export const MAX_MESSAGE_LENGTH = 10_000;
+
+export const sendMessageSchema = z.object({
+  conversationId: z.string().min(1).max(100),
+  message: z
+    .string()
+    .trim()
+    .min(1, "Message can't be empty.")
+    .max(MAX_MESSAGE_LENGTH, `Messages can be up to ${MAX_MESSAGE_LENGTH.toLocaleString("en-US")} characters.`),
+});
+
+export type SendMessageInput = z.infer<typeof sendMessageSchema>;

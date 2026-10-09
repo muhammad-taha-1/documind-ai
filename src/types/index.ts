@@ -59,3 +59,21 @@ export interface ConversationDetail extends ConversationSummary {
   /** Oldest first */
   messages: ChatMessage[];
 }
+
+/**
+ * One line of the POST /api/chat response stream (newline-delimited JSON).
+ * A stream is any number of `delta`s, then exactly one `done` or `error`.
+ */
+export type ChatStreamEvent =
+  /** The next piece of the reply */
+  | { type: "delta"; text: string }
+  /** The reply finished and both messages were saved */
+  | {
+      type: "done";
+      userMessage: ChatMessage;
+      assistantMessage: ChatMessage;
+      /** The conversation after the exchange (new title, bumped updatedAt) */
+      conversation: ConversationSummary;
+    }
+  /** Nothing was saved; the message can be sent again */
+  | { type: "error"; error: string };
