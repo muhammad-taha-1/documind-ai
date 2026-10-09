@@ -122,7 +122,7 @@ describe("POST /api/documents", () => {
     await scheduled[0]();
 
     expect(await prisma.document.findUniqueOrThrow({ where: { id: document.id } })).toMatchObject({
-      status: "PROCESSING",
+      status: "EMBEDDING",
       pageCount: 2,
     });
   });

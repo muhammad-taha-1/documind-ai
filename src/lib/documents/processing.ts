@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
+import { chunkPages } from "./chunker";
 import { PdfParseError, parsePdf } from "./parser";
 import { resolveStorageKey } from "./storage";
 
@@ -52,17 +53,31 @@ export async function runProcessing(documentId: string): Promise<void> {
 
     const bytes = await readFile(resolveStorageKey(document.filePath));
     const parsed = await parsePdf(bytes);
-    if (!parsed.text) {
+    const chunks = chunkPages(parsed.pages);
+    if (chunks.length === 0) {
       throw new PdfParseError(NO_TEXT_MESSAGE);
     }
 
-    await prisma.document.update({
-      where: { id: documentId },
-      data: { pageCount: parsed.pageCount },
-    });
+    // One transaction, so the document never shows EMBEDDING with a partial
+    // set of chunks. Deleting first gives retries a clean slate.
+    await prisma.$transaction([
+      prisma.documentChunk.deleteMany({ where: { documentId } }),
+      prisma.documentChunk.createMany({
+        data: chunks.map((chunk) => ({ ...chunk, documentId })),
+      }),
+      prisma.document.update({
+        where: { id: documentId },
+        data: {
+          pageCount: parsed.pageCount,
+          totalChunks: chunks.length,
+          embeddedChunks: 0,
+          status: DocumentStatus.EMBEDDING,
+        },
+      }),
+    ]);
 
-    // TODO(Phase 6): chunk parsed.pages, replace any chunks from a previous
-    // attempt, set totalChunks, then move to EMBEDDING.
+    // TODO(Phase 7): embed the chunks (bumping embeddedChunks per batch), then
+    // move to READY.
   } catch (error) {
     // PdfParseErrors carry a user-facing message; anything else is unexpected
     // (DB down, file missing), so log it and show a generic message instead

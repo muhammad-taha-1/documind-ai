@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
 import { makePdf } from "@/test/pdf";
+import { chunkPages } from "./chunker";
 import { claimDocumentForProcessing, NO_TEXT_MESSAGE, runProcessing } from "./processing";
 import { documentStorageKey, saveFile } from "./storage";
 
@@ -28,6 +29,13 @@ async function createDocument(
 }
 
 const findDocument = (id: string) => prisma.document.findUniqueOrThrow({ where: { id } });
+
+const findChunks = (documentId: string) =>
+  prisma.documentChunk.findMany({
+    where: { documentId },
+    orderBy: { chunkIndex: "asc" },
+    select: { chunkIndex: true, content: true, pageNumber: true, tokenCount: true },
+  });
 
 beforeAll(async () => {
   uploadRoot = await mkdtemp(path.join(tmpdir(), "documind-processing-"));
@@ -93,18 +101,78 @@ describe("claimDocumentForProcessing", () => {
 });
 
 describe("runProcessing", () => {
-  it("extracts text and records the page count", async () => {
+  it("extracts and chunks the text, then hands off to embedding", async () => {
     const id = await createDocument(makePdf(["Page one", "Page two", "Page three"]));
     await claimDocumentForProcessing(id, ownerId);
 
     await runProcessing(id);
 
-    // Chunking (Phase 6) picks up from here, so the status stays PROCESSING
+    // Embedding (Phase 7) picks up from here
     expect(await findDocument(id)).toMatchObject({
-      status: "PROCESSING",
+      status: "EMBEDDING",
       pageCount: 3,
+      totalChunks: 1,
+      embeddedChunks: 0,
       errorMessage: null,
     });
+    expect(await findChunks(id)).toEqual([
+      {
+        chunkIndex: 0,
+        content: "Page one\n\nPage two\n\nPage three",
+        pageNumber: 1,
+        tokenCount: 8,
+      },
+    ]);
+  });
+
+  it("stores long documents as many ordered chunks with their page numbers", async () => {
+    // ~2,400 characters per page over 40 lines, so each page needs two chunks
+    const pageText = (n: number) =>
+      Array.from({ length: 40 }, (_, line) =>
+        [0, 1].map((i) => `Page ${n} sentence ${line * 2 + i} has words.`).join(" "),
+      ).join("\n");
+    const id = await createDocument(makePdf([pageText(1), pageText(2), pageText(3)]));
+
+    await runProcessing(id);
+
+    const document = await findDocument(id);
+    const chunks = await findChunks(id);
+    expect(document.status).toBe("EMBEDDING");
+    expect(chunks.length).toBeGreaterThan(3);
+    expect(document.totalChunks).toBe(chunks.length);
+    expect(chunks.map((c) => c.chunkIndex)).toEqual(chunks.map((_, i) => i));
+    for (const chunk of chunks) {
+      // A chunk's own text starts on its page; overlap may repeat the previous page's end
+      expect(chunk.content).toContain(`Page ${chunk.pageNumber} sentence`);
+    }
+    expect(new Set(chunks.map((c) => c.pageNumber))).toEqual(new Set([1, 2, 3]));
+  });
+
+  it("stores more chunks than fit in one INSERT's bind parameters", async () => {
+    // Postgres allows 65,535 bind parameters per statement; at 5 per chunk
+    // row, 15,000 chunks only succeed if Prisma batches the insert
+    const id = await createDocument(null);
+    const text = Array.from({ length: 15_000 }, (_, i) => `Sentence ${i}.`).join("\n\n");
+    const chunks = chunkPages([{ pageNumber: 1, text }], { chunkSize: 20, chunkOverlap: 0 });
+    expect(chunks.length).toBe(15_000);
+
+    await prisma.documentChunk.createMany({
+      data: chunks.map((chunk) => ({ ...chunk, documentId: id })),
+    });
+    expect(await prisma.documentChunk.count({ where: { documentId: id } })).toBe(15_000);
+  });
+
+  it("replaces the chunks from an earlier attempt on retry", async () => {
+    const id = await createDocument(makePdf(["Fresh text"]), "ERROR");
+    await prisma.documentChunk.createMany({
+      data: [0, 1].map((chunkIndex) => ({ documentId: id, chunkIndex, content: "stale" })),
+    });
+
+    await claimDocumentForProcessing(id, ownerId);
+    await runProcessing(id);
+
+    expect(await findDocument(id)).toMatchObject({ status: "EMBEDDING", totalChunks: 1 });
+    expect((await findChunks(id)).map((c) => c.content)).toEqual(["Fresh text"]);
   });
 
   it("marks image-only PDFs as ERROR with an explanation", async () => {

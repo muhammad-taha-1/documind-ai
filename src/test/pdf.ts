@@ -1,6 +1,8 @@
 /**
  * Builds a small, valid PDF for tests — one page per entry, with that text
- * drawn on it. `null` makes a page with no text at all (like a scanned image).
+ * drawn on it, one row per `\n`-separated line. Text past the right edge of
+ * the page is dropped by pdf.js, so keep lines under ~90 characters.
+ * `null` makes a page with no text at all (like a scanned image).
  */
 export function makePdf(pages: (string | null)[]): Uint8Array<ArrayBuffer> {
   const objects: string[] = ["<< /Type /Catalog /Pages 2 0 R >>", ""];
@@ -8,8 +10,14 @@ export function makePdf(pages: (string | null)[]): Uint8Array<ArrayBuffer> {
   const kids: string[] = [];
 
   for (const text of pages) {
-    const escaped = text?.replace(/[\\()]/g, (char) => `\\${char}`);
-    const content = escaped === undefined ? "" : `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`;
+    // `'` moves to the next row (14pt leading) and draws the string
+    const lines = text
+      ?.split("\n")
+      .map((line) => `(${line.replace(/[\\()]/g, (char) => `\\${char}`)})`);
+    const content =
+      lines === undefined
+        ? ""
+        : `BT /F1 12 Tf 14 TL 72 734 Td ${lines.map((line) => `${line} '`).join(" ")} ET`;
     const pageRef = objects.length + 1;
     kids.push(`${pageRef} 0 R`);
     objects.push(
