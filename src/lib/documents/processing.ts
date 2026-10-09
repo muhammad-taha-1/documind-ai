@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
 import { chunkPages } from "./chunker";
+import { embedDocumentChunks } from "./embedding";
 import { PdfParseError, parsePdf } from "./parser";
 import { resolveStorageKey } from "./storage";
 
@@ -40,6 +41,9 @@ export async function claimDocumentForProcessing(
  * Runs the pipeline for a document that's already been claimed:
  *   extract text (Phase 5) → chunk (Phase 6) → embed (Phase 7) → READY
  *
+ * A retry starts again from the PDF: re-chunking replaces the old chunks,
+ * embeddings and all, so a half-finished attempt leaves nothing behind.
+ *
  * Runs in the background after the HTTP response, so it never throws —
  * failures are recorded on the document as status ERROR + errorMessage,
  * which the dashboard shows.
@@ -76,8 +80,12 @@ export async function runProcessing(documentId: string): Promise<void> {
       }),
     ]);
 
-    // TODO(Phase 7): embed the chunks (bumping embeddedChunks per batch), then
-    // move to READY.
+    await embedDocumentChunks(documentId);
+
+    await prisma.document.update({
+      where: { id: documentId },
+      data: { status: DocumentStatus.READY },
+    });
   } catch (error) {
     // PdfParseErrors carry a user-facing message; anything else is unexpected
     // (DB down, file missing), so log it and show a generic message instead

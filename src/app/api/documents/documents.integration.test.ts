@@ -6,6 +6,7 @@ import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/prisma";
 import { MAX_FILE_SIZE } from "@/lib/documents/validation";
+import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
 import type { DocumentSummary } from "@/types";
 
@@ -13,6 +14,13 @@ import type { DocumentSummary } from "@/types";
 // tests control. Everything else — Prisma, the filesystem — is real.
 const getSession = vi.hoisted(() => vi.fn<() => Promise<Session | null>>());
 vi.mock("@/lib/auth", () => ({ getSession }));
+
+// The pipeline ends with embedding; fake it rather than calling the API
+const generateEmbeddings = vi.hoisted(() => vi.fn<(texts: string[]) => Promise<number[][]>>());
+vi.mock("@/lib/ai/embeddings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ai/embeddings")>()),
+  generateEmbeddings,
+}));
 
 // after() needs a live Next.js request; collect the callbacks so tests can run them
 const scheduled = vi.hoisted(() => [] as Array<() => unknown>);
@@ -73,6 +81,7 @@ beforeEach(async () => {
   await prisma.document.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
   await rm(uploadRoot, { recursive: true, force: true });
   scheduled.length = 0;
+  generateEmbeddings.mockReset().mockImplementation(async (texts) => texts.map(fakeEmbedding));
   signInAs(ownerId);
 });
 
@@ -122,7 +131,7 @@ describe("POST /api/documents", () => {
     await scheduled[0]();
 
     expect(await prisma.document.findUniqueOrThrow({ where: { id: document.id } })).toMatchObject({
-      status: "EMBEDDING",
+      status: "READY",
       pageCount: 2,
     });
   });

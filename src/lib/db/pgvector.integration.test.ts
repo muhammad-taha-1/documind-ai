@@ -1,64 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { EMBEDDING_DIMENSIONS } from "@/lib/ai/embeddings";
+import { makeVector } from "@/test/embeddings";
 import { prisma } from "./prisma";
+import { searchSimilarChunks, toVectorLiteral } from "./vectors";
 
 /**
  * Phase 2 integration test: proves pgvector works end-to-end through Prisma 7's
  * driver adapter — the extension is installed, the `embedding vector(1536)`
  * column accepts writes via $executeRaw, and cosine-distance search via
- * $queryRaw returns correctly ordered, correctly scoped results.
+ * searchSimilarChunks (Phase 7) returns correctly ordered, correctly scoped results.
  *
  * Uses tiny hand-made vectors instead of real embeddings so the expected
  * similarities are known exactly and no API credits are needed.
  */
-
-const DIMENSIONS = 1536;
-
-/** A 1536-dim vector with the given values at the given indexes, zero elsewhere. */
-function makeVector(entries: Record<number, number>): number[] {
-  const vector = new Array<number>(DIMENSIONS).fill(0);
-  for (const [index, value] of Object.entries(entries)) {
-    vector[Number(index)] = value;
-  }
-  return vector;
-}
-
-/** pgvector's text format: "[0.1,0.2,...]" */
-function toVectorLiteral(vector: number[]): string {
-  return `[${vector.join(",")}]`;
-}
 
 async function setEmbedding(chunkId: string, vector: number[]): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "DocumentChunk"
     SET embedding = ${toVectorLiteral(vector)}::vector
     WHERE id = ${chunkId}
-  `;
-}
-
-interface SearchRow {
-  id: string;
-  documentId: string;
-  similarity: number;
-}
-
-/** Same query shape Phase 7's searchSimilarChunks will use. */
-async function search(
-  query: number[],
-  documentIds: string[],
-  userId: string,
-  limit = 5,
-): Promise<SearchRow[]> {
-  return prisma.$queryRaw<SearchRow[]>`
-    SELECT dc.id, dc."documentId",
-           1 - (dc.embedding <=> ${toVectorLiteral(query)}::vector) AS similarity
-    FROM "DocumentChunk" dc
-    JOIN "Document" d ON dc."documentId" = d.id
-    WHERE dc."documentId" = ANY(${documentIds}::text[])
-      AND d."userId" = ${userId}
-      AND dc.embedding IS NOT NULL
-    ORDER BY dc.embedding <=> ${toVectorLiteral(query)}::vector
-    LIMIT ${limit}
   `;
 }
 
@@ -131,7 +92,7 @@ describe("pgvector via Prisma", () => {
     const [row] = await prisma.$queryRaw<{ dims: number }[]>`
       SELECT vector_dims(embedding) AS dims FROM "DocumentChunk" WHERE id = ${chunkIds.exact}
     `;
-    expect(row.dims).toBe(DIMENSIONS);
+    expect(row.dims).toBe(EMBEDDING_DIMENSIONS);
   });
 
   it("rejects embeddings with the wrong dimension count", async () => {
@@ -143,7 +104,7 @@ describe("pgvector via Prisma", () => {
   });
 
   it("returns chunks ordered by cosine similarity with correct scores", async () => {
-    const results = await search(makeVector({ 0: 1 }), [ownerDocId], ownerId);
+    const results = await searchSimilarChunks(makeVector({ 0: 1 }), [ownerDocId], ownerId);
 
     expect(results.map((r) => r.id)).toEqual([
       chunkIds.exact,
@@ -156,18 +117,35 @@ describe("pgvector via Prisma", () => {
   });
 
   it("skips chunks that have no embedding yet", async () => {
-    const results = await search(makeVector({ 0: 1 }), [ownerDocId], ownerId);
+    const results = await searchSimilarChunks(makeVector({ 0: 1 }), [ownerDocId], ownerId);
     expect(results.map((r) => r.id)).not.toContain(chunkIds.unembedded);
   });
 
   it("respects the limit", async () => {
-    const results = await search(makeVector({ 0: 1 }), [ownerDocId], ownerId, 2);
+    const results = await searchSimilarChunks(makeVector({ 0: 1 }), [ownerDocId], ownerId, 2);
     expect(results).toHaveLength(2);
+  });
+
+  it("returns what citations need: content, location and document title", async () => {
+    const [best] = await searchSimilarChunks(makeVector({ 0: 1 }), [ownerDocId], ownerId, 1);
+    expect(best).toEqual({
+      id: chunkIds.exact,
+      content: "chunk 0",
+      pageNumber: null,
+      chunkIndex: 0,
+      documentId: ownerDocId,
+      documentTitle: "Owner doc",
+      similarity: expect.closeTo(1, 5),
+    });
+  });
+
+  it("returns nothing when no documents are selected", async () => {
+    expect(await searchSimilarChunks(makeVector({ 0: 1 }), [], ownerId)).toEqual([]);
   });
 
   it("never returns another user's chunks, even when their document ID is passed", async () => {
     // Simulates a malicious client sending someone else's document ID
-    const results = await search(makeVector({ 0: 1 }), [ownerDocId, otherDocId], ownerId);
+    const results = await searchSimilarChunks(makeVector({ 0: 1 }), [ownerDocId, otherDocId], ownerId);
 
     expect(results.every((r) => r.documentId === ownerDocId)).toBe(true);
     expect(results.map((r) => r.id)).not.toContain(chunkIds.otherUsers);

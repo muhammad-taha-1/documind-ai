@@ -5,10 +5,17 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
+import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
 import { chunkPages } from "./chunker";
 import { claimDocumentForProcessing, NO_TEXT_MESSAGE, runProcessing } from "./processing";
 import { documentStorageKey, saveFile } from "./storage";
+
+const generateEmbeddings = vi.hoisted(() => vi.fn<(texts: string[]) => Promise<number[][]>>());
+vi.mock("@/lib/ai/embeddings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ai/embeddings")>()),
+  generateEmbeddings,
+}));
 
 let uploadRoot: string;
 let ownerId: string;
@@ -37,6 +44,14 @@ const findChunks = (documentId: string) =>
     select: { chunkIndex: true, content: true, pageNumber: true, tokenCount: true },
   });
 
+async function countEmbedded(documentId: string): Promise<number> {
+  const [{ count }] = await prisma.$queryRaw<{ count: number }[]>`
+    SELECT count(*)::int AS count FROM "DocumentChunk"
+    WHERE "documentId" = ${documentId} AND embedding IS NOT NULL
+  `;
+  return count;
+}
+
 beforeAll(async () => {
   uploadRoot = await mkdtemp(path.join(tmpdir(), "documind-processing-"));
   process.env.UPLOAD_DIR = uploadRoot;
@@ -47,6 +62,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await prisma.document.deleteMany({ where: { userId: ownerId } });
+  generateEmbeddings.mockReset().mockImplementation(async (texts) => texts.map(fakeEmbedding));
 });
 
 afterAll(async () => {
@@ -101,18 +117,17 @@ describe("claimDocumentForProcessing", () => {
 });
 
 describe("runProcessing", () => {
-  it("extracts and chunks the text, then hands off to embedding", async () => {
+  it("extracts, chunks and embeds the text, then marks the document READY", async () => {
     const id = await createDocument(makePdf(["Page one", "Page two", "Page three"]));
     await claimDocumentForProcessing(id, ownerId);
 
     await runProcessing(id);
 
-    // Embedding (Phase 7) picks up from here
     expect(await findDocument(id)).toMatchObject({
-      status: "EMBEDDING",
+      status: "READY",
       pageCount: 3,
       totalChunks: 1,
-      embeddedChunks: 0,
+      embeddedChunks: 1,
       errorMessage: null,
     });
     expect(await findChunks(id)).toEqual([
@@ -123,6 +138,25 @@ describe("runProcessing", () => {
         tokenCount: 8,
       },
     ]);
+    expect(await countEmbedded(id)).toBe(1);
+  });
+
+  it("records embedding failures as ERROR with a generic message", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const apiError = new Error("429 Rate limit reached");
+    generateEmbeddings.mockRejectedValueOnce(apiError);
+    const id = await createDocument(makePdf(["Some text"]));
+
+    await runProcessing(id);
+
+    expect(await findDocument(id)).toMatchObject({
+      status: "ERROR",
+      errorMessage: "Processing failed. Please try again.",
+      totalChunks: 1,
+      embeddedChunks: 0,
+    });
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(id), apiError);
+    consoleError.mockRestore();
   });
 
   it("stores long documents as many ordered chunks with their page numbers", async () => {
@@ -137,7 +171,7 @@ describe("runProcessing", () => {
 
     const document = await findDocument(id);
     const chunks = await findChunks(id);
-    expect(document.status).toBe("EMBEDDING");
+    expect(document.status).toBe("READY");
     expect(chunks.length).toBeGreaterThan(3);
     expect(document.totalChunks).toBe(chunks.length);
     expect(chunks.map((c) => c.chunkIndex)).toEqual(chunks.map((_, i) => i));
@@ -171,7 +205,11 @@ describe("runProcessing", () => {
     await claimDocumentForProcessing(id, ownerId);
     await runProcessing(id);
 
-    expect(await findDocument(id)).toMatchObject({ status: "EMBEDDING", totalChunks: 1 });
+    expect(await findDocument(id)).toMatchObject({
+      status: "READY",
+      totalChunks: 1,
+      embeddedChunks: 1,
+    });
     expect((await findChunks(id)).map((c) => c.content)).toEqual(["Fresh text"]);
   });
 

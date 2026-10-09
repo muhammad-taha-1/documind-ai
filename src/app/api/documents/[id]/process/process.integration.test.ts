@@ -7,10 +7,18 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
 import { documentStorageKey, saveFile } from "@/lib/documents/storage";
+import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
 
 const getSession = vi.hoisted(() => vi.fn<() => Promise<Session | null>>());
 vi.mock("@/lib/auth", () => ({ getSession }));
+
+// The pipeline ends with embedding; fake it rather than calling the API
+const generateEmbeddings = vi.hoisted(() => vi.fn<(texts: string[]) => Promise<number[][]>>());
+vi.mock("@/lib/ai/embeddings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ai/embeddings")>()),
+  generateEmbeddings,
+}));
 
 // after() needs a live Next.js request; collect the callbacks so tests can run them
 const scheduled = vi.hoisted(() => [] as Array<() => unknown>);
@@ -56,6 +64,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   scheduled.length = 0;
+  generateEmbeddings.mockReset().mockImplementation(async (texts) => texts.map(fakeEmbedding));
   signInAs(ownerId);
 });
 
@@ -83,7 +92,7 @@ describe("POST /api/documents/:id/process", () => {
 
     await scheduled[0]();
     expect(await prisma.document.findUniqueOrThrow({ where: { id } })).toMatchObject({
-      status: "EMBEDDING",
+      status: "READY",
       pageCount: 1,
     });
   });
