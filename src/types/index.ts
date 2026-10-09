@@ -29,25 +29,33 @@ export interface DocumentChunkResult {
   similarity: number;
 }
 
+/** A conversation as the sidebar lists it */
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  /** ISO 8601. Bumped whenever the conversation changes, so the list sorts by recent activity */
+  updatedAt: string;
+}
+
+/** A document attached to a conversation, as the chat page shows it */
+export interface ConversationDocument {
+  id: string;
+  title: string;
+  status: DocumentStatus;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
   content: string;
-  conversationId: string;
-  model: string | null;
-  tokensUsed: number | null;
-  sourceChunkIds: string[];
-  toolCalls: unknown | null;
-  toolResults: unknown | null;
-  createdAt: Date;
+  /** ISO 8601 */
+  createdAt: string;
 }
 
-export interface SendMessageRequest {
-  conversationId: string;
-  message: string;
-}
-
-export interface CreateConversationRequest {
-  documentIds: string[];
-  title?: string;
+/** Everything the chat page needs to render a conversation */
+export interface ConversationDetail extends ConversationSummary {
+  /** Documents the user picked, oldest selection first. Deleted documents are left out. */
+  documents: ConversationDocument[];
+  /** Oldest first */
+  messages: ChatMessage[];
 }

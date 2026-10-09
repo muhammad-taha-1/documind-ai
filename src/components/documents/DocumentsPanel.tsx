@@ -1,13 +1,12 @@
 "use client";
 
-import { useDocuments } from "@/hooks/useDocuments";
-import type { DocumentSummary } from "@/types";
 import { DocumentList } from "./DocumentList";
+import { useDocumentsContext } from "./DocumentsProvider";
 import { DocumentUpload } from "./DocumentUpload";
 
-/** Upload zone + document list, sharing one piece of client state. */
-export function DocumentsPanel({ initialDocuments }: { initialDocuments: DocumentSummary[] }) {
-  const { documents, addDocument, retry } = useDocuments(initialDocuments);
+/** Upload zone + document list, backed by the dashboard-wide document state. */
+export function DocumentsPanel() {
+  const { documents, addDocument, retry } = useDocumentsContext();
 
   return (
     <div className="grid gap-8">
