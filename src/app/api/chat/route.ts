@@ -1,4 +1,6 @@
 import { describeChatError, generateChatReply } from "@/lib/ai/chat";
+import { buildRAGPrompt } from "@/lib/ai/prompts";
+import { type RetrievedContext, retrieveContext } from "@/lib/ai/rag";
 import { jsonError, readJsonBody } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { getChatHistory, saveExchange } from "@/lib/chat/queries";
@@ -13,10 +15,22 @@ const MAX_BODY_BYTES = MAX_MESSAGE_LENGTH * 4 + 1024;
 const REFUSED_MESSAGE =
   "Claude can't help with that request. Try rephrasing it — your message wasn't saved.";
 const EMPTY_REPLY_MESSAGE = "Claude didn't return a reply. Please try again.";
+const RETRIEVAL_FAILED_MESSAGE = "Couldn't search your documents. Please try again.";
+
+/** One line per question, so similarity thresholds can be tuned from real traffic */
+function logRetrieval(conversationId: string, { mode, sources }: RetrievedContext) {
+  const best = sources[0]?.similarity;
+  const score = typeof best === "number" ? `, best similarity ${best.toFixed(3)}` : "";
+  console.info(`Retrieval in ${conversationId}: ${mode}, ${sources.length} sources${score}`);
+}
 
 /**
  * POST /api/chat — send a message and stream Claude's reply.
  * Body: `{ conversationId: string, message: string }`
+ *
+ * This is the RAG pipeline end to end: find the passages of the chat's
+ * documents that answer the message (retrieve), put them in front of the
+ * question (augment), and stream Claude's answer (generate).
  *
  * Problems with the request (auth, validation, unknown conversation) are
  * normal JSON error responses. Once the reply starts, the response is a
@@ -42,8 +56,9 @@ export async function POST(request: Request) {
     return jsonError(400, firstIssueMessage(parsed.error));
   }
   const { conversationId, message } = parsed.data;
+  const userId = session.user.id;
 
-  const history = await getChatHistory(session.user.id, conversationId);
+  const history = await getChatHistory(userId, conversationId);
   if (!history) {
     // Also returned for other users' conversations, so IDs can't be probed
     return jsonError(404, "Conversation not found.");
@@ -64,8 +79,23 @@ export async function POST(request: Request) {
       };
 
       try {
+        let context: RetrievedContext;
+        try {
+          context = await retrieveContext(message, history.documentIds, userId, {
+            signal: generation.signal,
+          });
+        } catch (error) {
+          if (!generation.signal.aborted) {
+            console.error(`Document search failed in conversation ${conversationId}`, error);
+            send({ type: "error", error: RETRIEVAL_FAILED_MESSAGE });
+          }
+          return;
+        }
+        logRetrieval(conversationId, context);
+
+        // Only this turn carries passages; history replays the plain questions
         const reply = await generateChatReply(
-          [...history.turns, { role: "user", content: message }],
+          [...history.turns, { role: "user", content: buildRAGPrompt(message, context) }],
           { signal: generation.signal, onText: (text) => send({ type: "delta", text }) },
         );
 
@@ -92,6 +122,8 @@ export async function POST(request: Request) {
             model: reply.model,
             tokensUsed: reply.tokensUsed,
             createdAt: new Date(),
+            retrieval: context.mode,
+            sources: context.sources,
           },
           title: history.isEmpty ? titleFromMessage(message) : undefined,
         });

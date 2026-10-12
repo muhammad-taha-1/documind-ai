@@ -2,6 +2,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LocalTime } from "@/components/common/LocalTime";
 import type { ChatMessage } from "@/types";
+import { MessageSources } from "./MessageSources";
 
 // react-markdown never renders raw HTML from the text and strips unsafe URLs
 // (javascript: and friends), so model output can't inject markup or scripts
@@ -15,9 +16,14 @@ const markdownComponents: Components = {
 
 /**
  * User messages: right-aligned on a subtle background, shown as typed.
- * Assistant messages: left-aligned, no background, rendered as markdown.
+ * Assistant messages: left-aligned, no background, rendered as markdown,
+ * followed by the document passages they were based on.
  */
-export function MessageBubble({ message }: { message: Pick<ChatMessage, "role" | "content" | "createdAt"> }) {
+export function MessageBubble({
+  message,
+}: {
+  message: Pick<ChatMessage, "role" | "content" | "createdAt" | "retrieval" | "sources">;
+}) {
   const isUser = message.role === "user";
 
   return (
@@ -27,11 +33,14 @@ export function MessageBubble({ message }: { message: Pick<ChatMessage, "role" |
           {message.content}
         </div>
       ) : (
-        <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words prose-pre:overflow-x-auto">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-            {message.content}
-          </ReactMarkdown>
-        </div>
+        <>
+          <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words prose-pre:overflow-x-auto">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
+          <MessageSources retrieval={message.retrieval} sources={message.sources} />
+        </>
       )}
       <LocalTime
         iso={message.createdAt}

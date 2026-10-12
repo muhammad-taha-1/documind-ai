@@ -3,9 +3,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatReply, ChatTurn } from "@/lib/ai/chat";
+import { buildRAGPrompt } from "@/lib/ai/prompts";
+import { FULL_TEXT_MAX_CHARACTERS } from "@/lib/ai/rag";
 import { prisma } from "@/lib/db/prisma";
+import { toVectorLiteral } from "@/lib/db/vectors";
 import { HISTORY_MESSAGE_LIMIT } from "@/lib/chat/queries";
 import { readNdjson } from "@/lib/chat/stream";
+import { makeVector } from "@/test/embeddings";
 import type { ChatStreamEvent } from "@/types";
 
 const getSession = vi.hoisted(() => vi.fn<() => Promise<Session | null>>());
@@ -22,7 +26,18 @@ vi.mock("@/lib/ai/chat", async (importOriginal) => ({
   generateChatReply,
 }));
 
+// The question's embedding is scripted per test; the search itself runs in Postgres
+const generateEmbedding = vi.hoisted(() => vi.fn<(text: string) => Promise<number[]>>());
+vi.mock("@/lib/ai/embeddings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ai/embeddings")>()),
+  generateEmbedding,
+}));
+
 const { POST } = await import("./route");
+
+/** What Claude is sent for a chat with no searchable documents */
+const withoutDocuments = (question: string) =>
+  buildRAGPrompt(question, { mode: "NO_DOCUMENTS", sources: [] });
 
 let ownerId: string;
 let otherUserId: string;
@@ -66,10 +81,35 @@ function replyWith(pieces: string[], overrides: Partial<ChatReply> = {}): Genera
   };
 }
 
-async function createConversation(userId: string) {
-  const { id } = await prisma.conversation.create({ data: { userId, documentIds: [] } });
+async function createConversation(userId: string, documentIds: string[] = []) {
+  const { id } = await prisma.conversation.create({ data: { userId, documentIds } });
   return id;
 }
+
+/** A READY document whose chunks have the given text and embeddings */
+async function createDocument(
+  userId: string,
+  title: string,
+  chunks: { content: string; vector: number[] }[],
+) {
+  const document = await prisma.document.create({
+    data: { title, fileName: "d.pdf", fileSize: 1, filePath: "unused", status: "READY", userId },
+  });
+  const chunkIds: string[] = [];
+  for (const [chunkIndex, { content, vector }] of chunks.entries()) {
+    const { id } = await prisma.documentChunk.create({
+      data: { documentId: document.id, chunkIndex, pageNumber: chunkIndex + 1, content },
+    });
+    await prisma.$executeRaw`
+      UPDATE "DocumentChunk" SET embedding = ${toVectorLiteral(vector)}::vector WHERE id = ${id}
+    `;
+    chunkIds.push(id);
+  }
+  return { id: document.id, chunkIds };
+}
+
+/** Text long enough that a few chunks exceed the full-text limit, so retrieval has to search */
+const longText = (label: string) => `${label} ${"filler ".repeat(300)}`;
 
 const findMessages = (conversationId: string) =>
   prisma.message.findMany({ where: { conversationId }, orderBy: { createdAt: "asc" } });
@@ -82,8 +122,12 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await prisma.conversation.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
+  await prisma.document.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
   generateChatReply.mockReset();
+  generateEmbedding.mockReset();
   signInAs(ownerId);
+  // The route logs each retrieval for threshold tuning
+  vi.spyOn(console, "info").mockImplementation(() => {});
 });
 
 afterAll(async () => {
@@ -110,8 +154,13 @@ describe("POST /api/chat", () => {
     const done = events[3];
     expect(done).toMatchObject({
       type: "done",
-      userMessage: { role: "user", content: "Hi Claude" },
-      assistantMessage: { role: "assistant", content: "Hello there!" },
+      userMessage: { role: "user", content: "Hi Claude", retrieval: null, sources: [] },
+      assistantMessage: {
+        role: "assistant",
+        content: "Hello there!",
+        retrieval: "NO_DOCUMENTS",
+        sources: [],
+      },
       conversation: { id, title: "Hi Claude" },
     });
 
@@ -121,10 +170,12 @@ describe("POST /api/chat", () => {
       ["assistant", "Hello there!", "claude-test", 42],
     ]);
     // The message is sent trimmed, as the only turn
-    expect(generateChatReply.mock.calls[0][0]).toEqual([{ role: "user", content: "Hi Claude" }]);
+    expect(generateChatReply.mock.calls[0][0]).toEqual([
+      { role: "user", content: withoutDocuments("Hi Claude") },
+    ]);
   });
 
-  it("sends earlier messages as history and keeps the title after the first exchange", async () => {
+  it("sends earlier messages as plain history and keeps the title after the first exchange", async () => {
     const id = await createConversation(ownerId);
     generateChatReply.mockImplementation(replyWith(["First answer"]));
     await readEvents(await POST(chatRequest({ conversationId: id, message: "First question" })));
@@ -136,9 +187,10 @@ describe("POST /api/chat", () => {
     );
 
     expect(generateChatReply.mock.calls[1][0]).toEqual([
+      // Saved as asked: earlier questions don't carry their passages again
       { role: "user", content: "First question" },
       { role: "assistant", content: "First answer" },
-      { role: "user", content: "Second question" },
+      { role: "user", content: withoutDocuments("Second question") },
     ]);
     const conversation = await prisma.conversation.findUniqueOrThrow({ where: { id } });
     expect(conversation.title).toBe("First question");
@@ -166,7 +218,7 @@ describe("POST /api/chat", () => {
     const turns = generateChatReply.mock.calls[0][0];
     expect(turns[0]).toEqual({ role: "user", content: "message 6" });
     expect(turns.at(-2)).toEqual({ role: "user", content: "message 24" });
-    expect(turns.at(-1)).toEqual({ role: "user", content: "latest" });
+    expect(turns.at(-1)).toEqual({ role: "user", content: withoutDocuments("latest") });
     expect(turns).toHaveLength(HISTORY_MESSAGE_LIMIT);
   });
 
@@ -269,5 +321,186 @@ describe("POST /api/chat", () => {
     const response = await POST(chatRequest({ conversationId: "x", message: "Hi" }));
     expect(response.status).toBe(401);
     expect(generateChatReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/chat document retrieval", () => {
+  const e0 = makeVector({ 0: 1 });
+
+  /** Too big to send whole: chunk 1 matches e0 exactly, chunk 2 partly, the rest not at all */
+  async function createSearchableDocument(userId = ownerId) {
+    const chunks = [
+      { content: longText("Exact"), vector: e0 },
+      { content: longText("Partial"), vector: makeVector({ 0: Math.SQRT1_2, 1: Math.SQRT1_2 }) },
+      ...Array.from({ length: 6 }, (_, i) => ({
+        content: longText(`Unrelated ${i}`),
+        vector: makeVector({ 1: 1 }),
+      })),
+    ];
+    expect(chunks.reduce((total, chunk) => total + chunk.content.length, 0)).toBeGreaterThan(
+      FULL_TEXT_MAX_CHARACTERS,
+    );
+    return createDocument(userId, "Guide", chunks);
+  }
+
+  const lastPrompt = () => generateChatReply.mock.calls[0][0].at(-1)!.content;
+
+  it("answers from the closest passages and saves them as numbered sources", async () => {
+    const document = await createSearchableDocument();
+    const id = await createConversation(ownerId, [document.id]);
+    generateEmbedding.mockResolvedValue(e0);
+    generateChatReply.mockImplementation(replyWith(["Per [Source 1], yes."]));
+
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Is it?" })));
+
+    expect(generateEmbedding).toHaveBeenCalledWith("Is it?", { signal: expect.any(AbortSignal) });
+    // Claude sees the passages, best first, then the question
+    expect(lastPrompt()).toMatch(
+      /^<context>\n\[Source 1 — Guide, page 1\]\nExact filler[\s\S]*\[Source 2 — Guide, page 2\]\nPartial filler[\s\S]*<question>\nIs it\?\n<\/question>$/,
+    );
+    expect(lastPrompt()).not.toContain("Unrelated");
+
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      assistantMessage: {
+        retrieval: "MATCHED",
+        sources: [
+          {
+            position: 1,
+            documentId: document.id,
+            documentTitle: "Guide",
+            pageNumber: 1,
+            content: longText("Exact"),
+            similarity: expect.closeTo(1, 5),
+          },
+          { position: 2, pageNumber: 2, similarity: expect.closeTo(Math.SQRT1_2, 5) },
+        ],
+      },
+    });
+    // Only the reply has sources; the question is saved exactly as asked
+    const saved = await prisma.message.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: "asc" },
+      include: { sources: { orderBy: { position: "asc" } } },
+    });
+    expect(saved[0]).toMatchObject({ content: "Is it?", retrieval: null, sources: [] });
+    expect(saved[1].retrieval).toBe("MATCHED");
+    expect(saved[1].sources.map((source) => source.chunkId)).toEqual(document.chunkIds.slice(0, 2));
+    expect(console.info).toHaveBeenCalledWith(
+      `Retrieval in ${id}: MATCHED, 2 sources, best similarity 1.000`,
+    );
+  });
+
+  it("sends small documents in full, without a search", async () => {
+    const resume = await createDocument(ownerId, "Resume", [
+      { content: "Summary", vector: makeVector({ 3: 1 }) },
+      { content: "Experience", vector: makeVector({ 4: 1 }) },
+    ]);
+    const id = await createConversation(ownerId, [resume.id]);
+    generateChatReply.mockImplementation(replyWith(["Looks good."]));
+
+    const events = await readEvents(
+      await POST(chatRequest({ conversationId: id, message: "Is this resume ok?" })),
+    );
+
+    expect(generateEmbedding).not.toHaveBeenCalled();
+    expect(lastPrompt()).toContain(
+      "[Source 1 — Resume, page 1]\nSummary\n\n---\n\n[Source 2 — Resume, page 2]\nExperience",
+    );
+    expect(events.at(-1)).toMatchObject({
+      assistantMessage: {
+        retrieval: "FULL_TEXT",
+        sources: [
+          { position: 1, content: "Summary", similarity: null },
+          { position: 2, content: "Experience", similarity: null },
+        ],
+      },
+    });
+  });
+
+  it("flags a weak match", async () => {
+    const document = await createSearchableDocument();
+    const id = await createConversation(ownerId, [document.id]);
+    // Similarity 0.25 to the "Exact" chunk and 0 to the rest
+    generateEmbedding.mockResolvedValue(makeVector({ 0: 0.25, 2: Math.sqrt(1 - 0.25 ** 2) }));
+    generateChatReply.mockImplementation(replyWith(["Not sure."]));
+
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Hmm?" })));
+
+    expect(lastPrompt()).toContain("only loosely match");
+    expect(events.at(-1)).toMatchObject({
+      assistantMessage: {
+        retrieval: "WEAK_MATCH",
+        sources: [{ position: 1, similarity: expect.closeTo(0.25, 5) }],
+      },
+    });
+  });
+
+  it("tells Claude when nothing matches, and still answers", async () => {
+    const document = await createSearchableDocument();
+    const id = await createConversation(ownerId, [document.id]);
+    generateEmbedding.mockResolvedValue(makeVector({ 9: 1 }));
+    generateChatReply.mockImplementation(replyWith(["Your documents don't cover that."]));
+
+    const events = await readEvents(
+      await POST(chatRequest({ conversationId: id, message: "Cake recipe?" })),
+    );
+
+    expect(lastPrompt()).toBe(buildRAGPrompt("Cake recipe?", { mode: "NO_MATCH", sources: [] }));
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      assistantMessage: { retrieval: "NO_MATCH", sources: [] },
+    });
+  });
+
+  it("never reads another user's document, even if its ID is in the chat", async () => {
+    const theirs = await createDocument(otherUserId, "Private", [{ content: "secret", vector: e0 }]);
+    // Can't happen through the API (it checks ownership), so insert directly
+    const id = await createConversation(ownerId, [theirs.id]);
+    generateChatReply.mockImplementation(replyWith(["Nothing to go on."]));
+
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Tell me" })));
+
+    expect(lastPrompt()).toBe(withoutDocuments("Tell me"));
+    expect(JSON.stringify(events)).not.toContain("secret");
+  });
+
+  it("reports a failed search and saves nothing, without calling Claude", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const document = await createSearchableDocument();
+    const id = await createConversation(ownerId, [document.id]);
+    generateEmbedding.mockRejectedValue(new Error("OpenAI unavailable"));
+
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Hi" })));
+
+    expect(events).toEqual([
+      { type: "error", error: "Couldn't search your documents. Please try again." },
+    ]);
+    expect(generateChatReply).not.toHaveBeenCalled();
+    expect(await findMessages(id)).toEqual([]);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(id), expect.any(Error));
+    consoleError.mockRestore();
+  });
+
+  it("keeps the reply when a source disappears mid-answer, with the other numbers intact", async () => {
+    const document = await createSearchableDocument();
+    const id = await createConversation(ownerId, [document.id]);
+    generateEmbedding.mockResolvedValue(e0);
+    generateChatReply.mockImplementation(async (turns, options) => {
+      // e.g. the document is reprocessed while Claude is answering
+      await prisma.documentChunk.delete({ where: { id: document.chunkIds[0] } });
+      return replyWith(["See [Source 2]."])(turns, options);
+    });
+
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "?" })));
+
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      assistantMessage: {
+        content: "See [Source 2].",
+        sources: [{ position: 2, content: longText("Partial") }],
+      },
+    });
+    expect(await findMessages(id)).toHaveLength(2);
   });
 });

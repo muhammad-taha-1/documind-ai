@@ -106,6 +106,8 @@ model DocumentChunk {
   /// search is fast at this scale and, unlike HNSW, stays correct when results
   /// are filtered by user/document (see spec, Phase 2).
   embedding  Unsupported("vector(1536)")?
+  /// Replies that used this chunk as a source
+  usedBy     MessageSource[]
   createdAt  DateTime                     @default(now())
 
   @@index([documentId])
@@ -132,7 +134,10 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   model          String?
   tokensUsed     Int?
-  sourceChunkIds String[]
+  /// How the documents were searched for this reply (assistant messages from Phase 10 on)
+  retrieval      RetrievalMode?
+  /// The passages Claude was given, as numbered in the prompt ("[Source N]")
+  sources        MessageSource[]
   toolCalls      Json?
   toolResults    Json?
   /// Vision attachments (Phase 14), e.g. [{ type: "image", path, mediaType }]
@@ -146,4 +151,35 @@ enum MessageRole {
   user
   assistant
   system
+}
+
+enum RetrievalMode {
+  /// The documents were small enough to send in full — no search needed
+  FULL_TEXT
+  /// Vector search found passages that match the question well
+  MATCHED
+  /// The closest passages only loosely match the question
+  WEAK_MATCH
+  /// Nothing in the documents was close enough to send
+  NO_MATCH
+  /// The chat's documents have no searchable text (deleted, or being reprocessed)
+  NO_DOCUMENTS
+}
+
+/// One passage given to Claude for a reply. A table rather than an ID array on
+/// Message so each source keeps its score and its number, and disappears with
+/// its chunk (document deleted or reprocessed) instead of dangling.
+model MessageSource {
+  id         String        @id @default(cuid())
+  messageId  String
+  message    Message       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  /// The N in "[Source N]": 1-based, in the order Claude saw the passages
+  position   Int
+  chunkId    String
+  chunk      DocumentChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  /// Cosine similarity to the question; null when the full text was sent (no search ran)
+  similarity Float?
+
+  @@unique([messageId, position])
+  @@index([chunkId])
 }

@@ -11,6 +11,7 @@ vi.mock("./anthropic", () => ({
 }));
 
 const { describeChatError, generateChatReply } = await import("./chat");
+const { RAG_SYSTEM_PROMPT } = await import("./prompts");
 
 type StreamEvent = Anthropic.Beta.BetaRawMessageStreamEvent;
 
@@ -60,7 +61,7 @@ describe("generateChatReply", () => {
     });
   });
 
-  it("sends the conversation with the configured model, refusal fallback and caching", async () => {
+  it("sends the conversation with the configured model, prompt and refusal fallback", async () => {
     fakeStream([], { content: [{ type: "text", text: "ok", citations: null }] });
     const signal = new AbortController().signal;
     const turns = [
@@ -75,15 +76,47 @@ describe("generateChatReply", () => {
       expect.objectContaining({
         model: "test-model",
         max_tokens: 1000,
-        messages: turns,
-        system: expect.stringContaining("DocuMind"),
+        system: RAG_SYSTEM_PROMPT,
         output_config: { effort: "low" },
-        cache_control: { type: "ephemeral" },
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
       }),
       { signal },
     );
+  });
+
+  it("caches the conversation up to the new question, not the question itself", async () => {
+    fakeStream([], { content: [{ type: "text", text: "ok", citations: null }] });
+
+    await generateChatReply(
+      [
+        { role: "user", content: "First" },
+        { role: "assistant", content: "Reply" },
+        { role: "user", content: "<context>passages</context> Second" },
+      ],
+      { onText: () => {} },
+    );
+
+    const request = stream.mock.calls[0][0];
+    // The breakpoint ends the prefix the next request will start with
+    expect(request.messages).toEqual([
+      { role: "user", content: "First" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Reply", cache_control: { type: "ephemeral" } }],
+      },
+      { role: "user", content: "<context>passages</context> Second" },
+    ]);
+    // No automatic breakpoint, which would land on the one-off passages
+    expect(request).not.toHaveProperty("cache_control");
+  });
+
+  it("sets no cache breakpoint on the first message of a chat", async () => {
+    fakeStream([], { content: [{ type: "text", text: "ok", citations: null }] });
+
+    await generateChatReply([{ role: "user", content: "Hi" }], { onText: () => {} });
+
+    expect(stream.mock.calls[0][0].messages).toEqual([{ role: "user", content: "Hi" }]);
   });
 
   it("returns only text, skipping thinking and fallback blocks", async () => {

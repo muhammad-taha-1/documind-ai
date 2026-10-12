@@ -7,7 +7,12 @@ interface FakeEmbedding {
 }
 
 const { create, constructed } = vi.hoisted(() => ({
-  create: vi.fn<(body: { model: string; input: string[] }) => Promise<{ data: FakeEmbedding[] }>>(),
+  create: vi.fn<
+    (
+      body: { model: string; input: string[] },
+      options: { signal?: AbortSignal },
+    ) => Promise<{ data: FakeEmbedding[] }>
+  >(),
   constructed: [] as unknown[],
 }));
 
@@ -41,7 +46,10 @@ describe("generateEmbeddings", () => {
 
     expect(await generateEmbeddings(["first", "second"])).toEqual(vectors);
     expect(create).toHaveBeenCalledOnce();
-    expect(create).toHaveBeenCalledWith({ model: EMBEDDING_MODEL, input: ["first", "second"] });
+    expect(create).toHaveBeenCalledWith(
+      { model: EMBEDDING_MODEL, input: ["first", "second"] },
+      { signal: undefined },
+    );
   });
 
   it("matches results to inputs by index, not response order", async () => {
@@ -66,6 +74,15 @@ describe("generateEmbeddings", () => {
     await expect(generateEmbeddings(["a"])).rejects.toThrow(/1536-dimension/);
   });
 
+  it("passes the abort signal to the request", async () => {
+    respondWith([makeVector({ 0: 1 })]);
+    const signal = new AbortController().signal;
+
+    await generateEmbedding("question", { signal });
+
+    expect(create).toHaveBeenCalledWith({ model: EMBEDDING_MODEL, input: ["question"] }, { signal });
+  });
+
   it("passes API errors through", async () => {
     create.mockRejectedValueOnce(new Error("rate limited"));
     await expect(generateEmbeddings(["a"])).rejects.toThrow("rate limited");
@@ -85,6 +102,9 @@ describe("generateEmbedding", () => {
     respondWith([vector]);
 
     expect(await generateEmbedding("question")).toEqual(vector);
-    expect(create).toHaveBeenCalledWith({ model: EMBEDDING_MODEL, input: ["question"] });
+    expect(create).toHaveBeenCalledWith(
+      { model: EMBEDDING_MODEL, input: ["question"] },
+      { signal: undefined },
+    );
   });
 });

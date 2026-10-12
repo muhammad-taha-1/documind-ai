@@ -1,5 +1,5 @@
 import { EMBEDDING_DIMENSIONS } from "@/lib/ai/embeddings";
-import type { DocumentChunkResult } from "@/types";
+import type { DocumentChunkResult, SourceChunk } from "@/types";
 import { prisma } from "./prisma";
 
 // Prisma can't read or write `vector` columns through its query API, so
@@ -19,6 +19,53 @@ export function toVectorLiteral(vector: readonly number[]): string {
     throw new RangeError("Vector contains a non-finite value");
   }
   return `[${vector.join(",")}]`;
+}
+
+// A chunk is "searchable" when it has an embedding and its document belongs
+// to the user. Every query below applies the same two conditions, so search,
+// size checks and full-text reads always agree on what the user can see.
+
+/** How much searchable text the documents hold, to decide whether to send it all. */
+export async function measureSearchableText(
+  documentIds: readonly string[],
+  userId: string,
+): Promise<{ chunks: number; characters: number }> {
+  if (documentIds.length === 0) {
+    return { chunks: 0, characters: 0 };
+  }
+  const [row] = await prisma.$queryRaw<{ chunks: number; characters: number }[]>`
+    SELECT count(*)::int AS chunks, COALESCE(sum(length(dc.content)), 0)::int AS characters
+    FROM "DocumentChunk" dc
+    JOIN "Document" d ON dc."documentId" = d.id
+    WHERE dc."documentId" = ANY(${documentIds}::text[])
+      AND d."userId" = ${userId}
+      AND dc.embedding IS NOT NULL
+  `;
+  return row;
+}
+
+/**
+ * Every searchable chunk, in reading order: documents in the order given,
+ * then each document's chunks from first to last. `similarity` is null
+ * because nothing was compared — the caller sends all of it.
+ */
+export async function listSearchableChunks(
+  documentIds: readonly string[],
+  userId: string,
+): Promise<SourceChunk[]> {
+  if (documentIds.length === 0) {
+    return [];
+  }
+  return prisma.$queryRaw`
+    SELECT dc.id, dc.content, dc."pageNumber", dc."chunkIndex", dc."documentId",
+           d.title AS "documentTitle", NULL::float8 AS similarity
+    FROM "DocumentChunk" dc
+    JOIN "Document" d ON dc."documentId" = d.id
+    WHERE dc."documentId" = ANY(${documentIds}::text[])
+      AND d."userId" = ${userId}
+      AND dc.embedding IS NOT NULL
+    ORDER BY array_position(${documentIds}::text[], dc."documentId"), dc."chunkIndex"
+  `;
 }
 
 /**

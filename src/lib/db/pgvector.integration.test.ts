@@ -3,7 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EMBEDDING_DIMENSIONS } from "@/lib/ai/embeddings";
 import { makeVector } from "@/test/embeddings";
 import { prisma } from "./prisma";
-import { searchSimilarChunks, toVectorLiteral } from "./vectors";
+import {
+  listSearchableChunks,
+  measureSearchableText,
+  searchSimilarChunks,
+  toVectorLiteral,
+} from "./vectors";
 
 /**
  * Phase 2 integration test: proves pgvector works end-to-end through Prisma 7's
@@ -149,6 +154,53 @@ describe("pgvector via Prisma", () => {
 
     expect(results.every((r) => r.documentId === ownerDocId)).toBe(true);
     expect(results.map((r) => r.id)).not.toContain(chunkIds.otherUsers);
+  });
+
+  it("measures only the user's embedded text", async () => {
+    // "chunk 0", "chunk 1", "chunk 2": the unembedded chunk and the other user's don't count
+    expect(await measureSearchableText([ownerDocId, otherDocId], ownerId)).toEqual({
+      chunks: 3,
+      characters: 21,
+    });
+    expect(await measureSearchableText([], ownerId)).toEqual({ chunks: 0, characters: 0 });
+    expect(await measureSearchableText([ownerDocId], otherUserId)).toEqual({ chunks: 0, characters: 0 });
+  });
+
+  it("lists every searchable chunk in reading order, documents in the order given", async () => {
+    const second = await prisma.document.create({
+      data: { title: "Second", fileName: "s.pdf", fileSize: 1, filePath: "/dev/null", userId: ownerId },
+    });
+    // Created out of order, so the result can't just be insertion order
+    for (const chunkIndex of [1, 0]) {
+      const { id } = await prisma.documentChunk.create({
+        data: { documentId: second.id, chunkIndex, pageNumber: chunkIndex + 1, content: `second ${chunkIndex}` },
+      });
+      await setEmbedding(id, makeVector({ 2: 1 }));
+    }
+
+    try {
+      const chunks = await listSearchableChunks([second.id, ownerDocId, otherDocId], ownerId);
+
+      expect(chunks.map((chunk) => chunk.content)).toEqual([
+        "second 0",
+        "second 1",
+        "chunk 0",
+        "chunk 1",
+        "chunk 2",
+      ]);
+      expect(chunks[0]).toEqual({
+        id: expect.any(String),
+        content: "second 0",
+        pageNumber: 1,
+        chunkIndex: 0,
+        documentId: second.id,
+        documentTitle: "Second",
+        similarity: null,
+      });
+      expect(await listSearchableChunks([], ownerId)).toEqual([]);
+    } finally {
+      await prisma.document.delete({ where: { id: second.id } });
+    }
   });
 
   it("cascades chunk deletion when a document is deleted", async () => {

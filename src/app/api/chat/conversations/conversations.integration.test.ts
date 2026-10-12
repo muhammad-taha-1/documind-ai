@@ -198,14 +198,68 @@ describe("GET /api/chat/conversations/:id", () => {
     ]);
     // System messages aren't part of the visible chat
     expect(conversation.messages).toEqual([
-      { id: expect.any(String), role: "user", content: "Hi", createdAt: "2026-01-01T10:00:00.000Z" },
+      {
+        id: expect.any(String),
+        role: "user",
+        content: "Hi",
+        createdAt: "2026-01-01T10:00:00.000Z",
+        retrieval: null,
+        sources: [],
+      },
       {
         id: expect.any(String),
         role: "assistant",
         content: "Hello!",
         createdAt: "2026-01-01T10:01:00.000Z",
+        retrieval: null,
+        sources: [],
       },
     ]);
+  });
+
+  it("returns each reply's sources by number, dropping those whose passage is gone", async () => {
+    const documentId = await createDocument(ownerId, "Handbook");
+    const chunk = (chunkIndex: number, pageNumber: number) =>
+      prisma.documentChunk.create({
+        data: { documentId, chunkIndex, pageNumber, content: `Passage ${chunkIndex}` },
+      });
+    const [first, second, third] = [await chunk(0, 1), await chunk(1, 2), await chunk(2, 3)];
+    const id = await createConversationRow(ownerId, [documentId]);
+    await prisma.message.create({
+      data: {
+        conversationId: id,
+        role: "assistant",
+        content: "See [Source 1] and [Source 3].",
+        retrieval: "MATCHED",
+        sources: {
+          create: [
+            { position: 3, chunkId: third.id, similarity: 0.31 },
+            { position: 1, chunkId: first.id, similarity: 0.62 },
+            { position: 2, chunkId: second.id, similarity: 0.45 },
+          ],
+        },
+      },
+    });
+    // e.g. the document was reprocessed and this chunk replaced
+    await prisma.documentChunk.delete({ where: { id: second.id } });
+
+    const { conversation } = (await (await getOne(id)).json()) as { conversation: ConversationDetail };
+
+    expect(conversation.messages[0]).toMatchObject({
+      retrieval: "MATCHED",
+      sources: [
+        {
+          position: 1,
+          documentId,
+          documentTitle: "Handbook",
+          pageNumber: 1,
+          content: "Passage 0",
+          similarity: 0.62,
+        },
+        // Numbers are kept, so "[Source 3]" still points at the right passage
+        { position: 3, content: "Passage 2", pageNumber: 3, similarity: 0.31 },
+      ],
+    });
   });
 
   it("leaves out documents deleted since the conversation started", async () => {

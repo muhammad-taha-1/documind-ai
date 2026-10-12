@@ -1,8 +1,8 @@
 // Enums come from Prisma's generated enums file, which is safe to import in
 // client components (it has no database code), so they can't drift from the schema.
-import type { DocumentStatus, MessageRole } from "@/generated/prisma/enums";
+import type { DocumentStatus, MessageRole, RetrievalMode } from "@/generated/prisma/enums";
 
-export { DocumentStatus, MessageRole } from "@/generated/prisma/enums";
+export { DocumentStatus, MessageRole, RetrievalMode } from "@/generated/prisma/enums";
 
 /** A document as the API and UI see it — no server file paths. */
 export interface DocumentSummary {
@@ -29,6 +29,24 @@ export interface DocumentChunkResult {
   similarity: number;
 }
 
+/**
+ * A passage given to Claude as context: a search result, or one chunk of a
+ * document sent in full (then similarity is null — nothing was compared).
+ */
+export type SourceChunk = Omit<DocumentChunkResult, "similarity"> & { similarity: number | null };
+
+/** A source shown under an assistant reply */
+export interface ChatSource {
+  /** The N in "[Source N]" */
+  position: number;
+  documentId: string;
+  documentTitle: string;
+  pageNumber: number | null;
+  content: string;
+  /** Cosine similarity to the question; null when the full text was sent */
+  similarity: number | null;
+}
+
 /** A conversation as the sidebar lists it */
 export interface ConversationSummary {
   id: string;
@@ -50,6 +68,10 @@ export interface ChatMessage {
   content: string;
   /** ISO 8601 */
   createdAt: string;
+  /** How the documents were searched for this reply; null for user messages and pre-RAG replies */
+  retrieval: RetrievalMode | null;
+  /** The passages the reply was based on, by source number. Empty for user messages. */
+  sources: ChatSource[];
 }
 
 /** Everything the chat page needs to render a conversation */

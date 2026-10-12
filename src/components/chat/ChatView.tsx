@@ -43,6 +43,9 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
                 role: "assistant" as const,
                 content: pending.reply,
                 createdAt: pending.userMessage.createdAt,
+                // Sources arrive with the saved reply
+                retrieval: null,
+                sources: [],
               },
             ]
           : []),

@@ -19,15 +19,26 @@ function getClient(): OpenAI {
   return client;
 }
 
+export interface EmbeddingOptions {
+  /** Cancels the request, e.g. when the user who asked for it has gone */
+  signal?: AbortSignal;
+}
+
 /**
  * Embeds several texts in one request. The API accepts up to 2,048 inputs
  * (and 300k tokens) per request; callers batch well below that.
  */
-export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
+export async function generateEmbeddings(
+  texts: string[],
+  { signal }: EmbeddingOptions = {},
+): Promise<number[][]> {
   if (texts.length === 0) {
     return [];
   }
-  const response = await getClient().embeddings.create({ model: EMBEDDING_MODEL, input: texts });
+  const response = await getClient().embeddings.create(
+    { model: EMBEDDING_MODEL, input: texts },
+    { signal },
+  );
 
   // Each result carries the index of its input, so match on that rather than
   // relying on the response order
@@ -45,7 +56,7 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   return embeddings;
 }
 
-export async function generateEmbedding(text: string): Promise<number[]> {
-  const [embedding] = await generateEmbeddings([text]);
+export async function generateEmbedding(text: string, options?: EmbeddingOptions): Promise<number[]> {
+  const [embedding] = await generateEmbeddings([text], options);
   return embedding;
 }

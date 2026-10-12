@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageRole } from "@/types";
 import { anthropic, CHAT_EFFORT, CHAT_MAX_TOKENS, CHAT_MODEL } from "./anthropic";
-import { SYSTEM_PROMPT } from "./prompts";
+import { RAG_SYSTEM_PROMPT } from "./prompts";
 
 /** Server-side refusal fallback: see the `fallbacks` comment in generateChatReply */
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
@@ -22,6 +22,25 @@ export interface ChatReply {
 }
 
 /**
+ * The turns as API messages, with a cache breakpoint at the end of the
+ * conversation so far (the turn before the new question). The next request
+ * starts with exactly that prefix, so it reads it from the cache. The new
+ * question isn't cached: it carries passages retrieved for it alone, which
+ * are never sent again, so caching it would pay the write premium for nothing.
+ */
+function toCachedMessages(turns: ChatTurn[]): Anthropic.Beta.BetaMessageParam[] {
+  const lastHistoryTurn = turns.length - 2;
+  return turns.map((turn, i) =>
+    i === lastHistoryTurn
+      ? {
+          role: turn.role,
+          content: [{ type: "text", text: turn.content, cache_control: { type: "ephemeral" } }],
+        }
+      : turn,
+  );
+}
+
+/**
  * Streams Claude's reply to a conversation, calling `onText` with each piece
  * of text as it arrives, and resolves with the complete reply.
  *
@@ -36,13 +55,11 @@ export async function generateChatReply(
     {
       model: CHAT_MODEL,
       max_tokens: CHAT_MAX_TOKENS,
-      system: SYSTEM_PROMPT,
-      messages: turns,
+      system: RAG_SYSTEM_PROMPT,
+      // Prefixes below the minimum cacheable size (512 tokens on this model)
+      // simply aren't cached, so short chats pay nothing extra
+      messages: toCachedMessages(turns),
       output_config: { effort: CHAT_EFFORT },
-      // Caches the conversation so far; the next turn re-reads it at a
-      // fraction of the input price (short chats are below the minimum
-      // cacheable size and simply aren't cached)
-      cache_control: { type: "ephemeral" },
       // If a safety classifier declines the request, the API retries it on
       // the model Anthropic recommends for that kind of refusal, on the same
       // stream — so a false positive doesn't become a failed reply

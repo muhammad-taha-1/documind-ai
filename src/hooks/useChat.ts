@@ -56,6 +56,8 @@ export function useChat({
           role: "user",
           content,
           createdAt: new Date().toISOString(),
+          retrieval: null,
+          sources: [],
         },
         reply: "",
       });
