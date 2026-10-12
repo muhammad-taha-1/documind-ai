@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import { LocalTime } from "@/components/common/LocalTime";
 import type { ChatMessage } from "@/types";
 import { MessageSources } from "./MessageSources";
+import { ToolCallDisplay } from "./ToolCallDisplay";
 
 // react-markdown never renders raw HTML from the text and strips unsafe URLs
 // (javascript: and friends), so model output can't inject markup or scripts
@@ -16,13 +17,13 @@ const markdownComponents: Components = {
 
 /**
  * User messages: right-aligned on a subtle background, shown as typed.
- * Assistant messages: left-aligned, no background, rendered as markdown,
- * followed by the document passages they were based on.
+ * Assistant messages: left-aligned, no background: the tools Claude used,
+ * then the reply as markdown, then the document passages it was based on.
  */
 export function MessageBubble({
   message,
 }: {
-  message: Pick<ChatMessage, "role" | "content" | "createdAt" | "retrieval" | "sources">;
+  message: Pick<ChatMessage, "role" | "content" | "createdAt" | "retrieval" | "sources" | "toolCalls">;
 }) {
   const isUser = message.role === "user";
 
@@ -34,6 +35,15 @@ export function MessageBubble({
         </div>
       ) : (
         <>
+          {message.toolCalls.length > 0 && (
+            <ol aria-label="Tools used" className="grid w-full gap-1.5">
+              {message.toolCalls.map((call) => (
+                <li key={call.id}>
+                  <ToolCallDisplay call={call} />
+                </li>
+              ))}
+            </ol>
+          )}
           <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words prose-pre:overflow-x-auto">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
               {message.content}

@@ -1,5 +1,5 @@
 import { listSearchableChunks, measureSearchableText, searchSimilarChunks } from "@/lib/db/vectors";
-import type { RetrievalMode, SourceChunk } from "@/types";
+import type { DocumentChunkResult, RetrievalMode, SourceChunk } from "@/types";
 import { generateEmbedding } from "./embeddings";
 
 // Retrieval: the "R" in RAG. Given a question, find the parts of the chat's
@@ -38,6 +38,23 @@ export const TOP_K = 5;
  */
 export const FULL_TEXT_MAX_CHARACTERS = 12_000;
 
+/**
+ * The passages closest in meaning to `query`, best first, without the
+ * clearly unrelated ones. Used for each question and by the search tool.
+ */
+export async function searchPassages(
+  query: string,
+  documentIds: readonly string[],
+  userId: string,
+  { topK = TOP_K, signal }: { topK?: number; signal?: AbortSignal } = {},
+): Promise<DocumentChunkResult[]> {
+  // 1. Embed the query with the same model as the chunks, so the vectors are comparable
+  const queryEmbedding = await generateEmbedding(query, { signal });
+  // 2. Find the closest chunks, dropping what scores below the floor
+  const results = await searchSimilarChunks(queryEmbedding, documentIds, userId, topK);
+  return results.filter((chunk) => chunk.similarity >= MIN_SIMILARITY);
+}
+
 export interface RetrievedContext {
   mode: RetrievalMode;
   /** The passages to give Claude, in order: the first is "[Source 1]" */
@@ -64,13 +81,7 @@ export async function retrieveContext(
     return { mode: "FULL_TEXT", sources: await listSearchableChunks(documentIds, userId) };
   }
 
-  // 1. Embed the question with the same model as the chunks, so the vectors are comparable
-  const queryEmbedding = await generateEmbedding(question, { signal });
-  // 2. Find the closest chunks, dropping the clearly unrelated
-  const sources = (await searchSimilarChunks(queryEmbedding, documentIds, userId, TOP_K)).filter(
-    (chunk) => chunk.similarity >= MIN_SIMILARITY,
-  );
-
+  const sources = await searchPassages(question, documentIds, userId, { signal });
   if (sources.length === 0) {
     return { mode: "NO_MATCH", sources };
   }

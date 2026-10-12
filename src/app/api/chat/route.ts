@@ -1,6 +1,8 @@
 import { describeChatError, generateChatReply } from "@/lib/ai/chat";
 import { buildRAGPrompt } from "@/lib/ai/prompts";
 import { type RetrievedContext, retrieveContext } from "@/lib/ai/rag";
+import { SourceList } from "@/lib/ai/sources";
+import { createToolbox } from "@/lib/ai/tools";
 import { jsonError, readJsonBody } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { getChatHistory, saveExchange } from "@/lib/chat/queries";
@@ -30,7 +32,9 @@ function logRetrieval(conversationId: string, { mode, sources }: RetrievedContex
  *
  * This is the RAG pipeline end to end: find the passages of the chat's
  * documents that answer the message (retrieve), put them in front of the
- * question (augment), and stream Claude's answer (generate).
+ * question (augment), and stream Claude's answer (generate). While
+ * answering, Claude can call tools to search again or read a page; their
+ * progress streams as `tool` events.
  *
  * Problems with the request (auth, validation, unknown conversation) are
  * normal JSON error responses. Once the reply starts, the response is a
@@ -79,11 +83,10 @@ export async function POST(request: Request) {
       };
 
       try {
+        const documentIds = history.documents.map((document) => document.id);
         let context: RetrievedContext;
         try {
-          context = await retrieveContext(message, history.documentIds, userId, {
-            signal: generation.signal,
-          });
+          context = await retrieveContext(message, documentIds, userId, { signal: generation.signal });
         } catch (error) {
           if (!generation.signal.aborted) {
             console.error(`Document search failed in conversation ${conversationId}`, error);
@@ -93,10 +96,24 @@ export async function POST(request: Request) {
         }
         logRetrieval(conversationId, context);
 
+        // Retrieval's passages are Sources 1..n; tools number theirs after
+        const sources = new SourceList(context.sources);
+        const toolbox = createToolbox({
+          userId,
+          documents: history.documents,
+          sources,
+          signal: generation.signal,
+        });
+
         // Only this turn carries passages; history replays the plain questions
         const reply = await generateChatReply(
-          [...history.turns, { role: "user", content: buildRAGPrompt(message, context) }],
-          { signal: generation.signal, onText: (text) => send({ type: "delta", text }) },
+          [...history.turns, { role: "user", content: buildRAGPrompt(message, context, history.documents) }],
+          {
+            toolbox,
+            signal: generation.signal,
+            onText: (text) => send({ type: "delta", text }),
+            onToolCall: (call) => send({ type: "tool", call }),
+          },
         );
 
         // Not saved: resending a declined message with every later turn
@@ -123,7 +140,8 @@ export async function POST(request: Request) {
             tokensUsed: reply.tokensUsed,
             createdAt: new Date(),
             retrieval: context.mode,
-            sources: context.sources,
+            sources: sources.all,
+            toolCalls: reply.toolCalls,
           },
           title: history.isEmpty ? titleFromMessage(message) : undefined,
         });

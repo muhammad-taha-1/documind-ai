@@ -205,6 +205,7 @@ describe("GET /api/chat/conversations/:id", () => {
         createdAt: "2026-01-01T10:00:00.000Z",
         retrieval: null,
         sources: [],
+        toolCalls: [],
       },
       {
         id: expect.any(String),
@@ -213,8 +214,35 @@ describe("GET /api/chat/conversations/:id", () => {
         createdAt: "2026-01-01T10:01:00.000Z",
         retrieval: null,
         sources: [],
+        toolCalls: [],
       },
     ]);
+  });
+
+  it("returns the tools each reply used, skipping a record that isn't valid", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const id = await createConversationRow(ownerId, []);
+    const call = {
+      id: "toolu_1",
+      name: "search_documents",
+      input: { query: "pricing" },
+      label: 'Searched your documents for "pricing"',
+      status: "done",
+      output: "[Source 1 — Doc]\nPrices",
+    };
+    await prisma.message.createMany({
+      data: [
+        { conversationId: id, role: "assistant", content: "A", toolCalls: [call], createdAt: new Date("2026-01-01T10:00Z") },
+        // e.g. written by an older version of the app
+        { conversationId: id, role: "assistant", content: "B", toolCalls: [{ tool: "x" }], createdAt: new Date("2026-01-01T10:01Z") },
+      ],
+    });
+
+    const { conversation } = (await (await getOne(id)).json()) as { conversation: ConversationDetail };
+
+    expect(conversation.messages.map((message) => message.toolCalls)).toEqual([[call], []]);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("malformed toolCalls"), expect.anything());
+    consoleError.mockRestore();
   });
 
   it("returns each reply's sources by number, dropping those whose passage is gone", async () => {

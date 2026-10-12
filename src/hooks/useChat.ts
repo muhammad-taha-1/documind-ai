@@ -3,13 +3,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseApiError } from "@/lib/api";
 import { readNdjson } from "@/lib/chat/stream";
-import type { ChatMessage, ChatStreamEvent, ConversationSummary } from "@/types";
+import type { ChatMessage, ChatStreamEvent, ConversationSummary, ToolCall } from "@/types";
 
 /** A message on its way: shown straight away, with the reply filling in as it streams. */
 export interface PendingExchange {
   userMessage: ChatMessage;
   /** The reply so far ("" until the first text arrives) */
   reply: string;
+  /** Tools Claude is using or has used for this reply, in call order */
+  toolCalls: ToolCall[];
+}
+
+/** Adds a tool call, or replaces it with its latest state (running, then done or failed). */
+function upsertToolCall(calls: ToolCall[], call: ToolCall): ToolCall[] {
+  return calls.some((existing) => existing.id === call.id)
+    ? calls.map((existing) => (existing.id === call.id ? call : existing))
+    : [...calls, call];
 }
 
 const NETWORK_ERROR = "Couldn't reach the server. Check your connection and try again.";
@@ -58,8 +67,10 @@ export function useChat({
           createdAt: new Date().toISOString(),
           retrieval: null,
           sources: [],
+          toolCalls: [],
         },
         reply: "",
+        toolCalls: [],
       });
 
       try {
@@ -79,6 +90,11 @@ export function useChat({
           switch (event.type) {
             case "delta":
               setPending((current) => current && { ...current, reply: current.reply + event.text });
+              break;
+            case "tool":
+              setPending(
+                (current) => current && { ...current, toolCalls: upsertToolCall(current.toolCalls, event.call) },
+              );
               break;
             case "done":
               setMessages((current) => [...current, event.userMessage, event.assistantMessage]);

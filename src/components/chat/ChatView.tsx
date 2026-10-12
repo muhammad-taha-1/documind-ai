@@ -31,12 +31,13 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
     }
   }
 
-  // The exchange in flight is shown as if saved; the reply bubble appears with its first text
+  // The exchange in flight is shown as if saved; the reply bubble appears
+  // with its first text or tool call
   const displayed: ChatMessage[] = pending
     ? [
         ...messages,
         pending.userMessage,
-        ...(pending.reply
+        ...(pending.reply || pending.toolCalls.length > 0
           ? [
               {
                 id: "streaming-reply",
@@ -46,6 +47,7 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
                 // Sources arrive with the saved reply
                 retrieval: null,
                 sources: [],
+                toolCalls: pending.toolCalls,
               },
             ]
           : []),

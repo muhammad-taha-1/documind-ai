@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import type {
@@ -6,6 +7,7 @@ import type {
   ConversationSummary,
   RetrievalMode,
   SourceChunk,
+  ToolCall,
 } from "@/types";
 
 // Every query takes the user ID and filters by it, so a conversation that
@@ -17,12 +19,38 @@ function toConversationSummary(row: { id: string; title: string; updatedAt: Date
   return { ...row, updatedAt: row.updatedAt.toISOString() } satisfies ConversationSummary;
 }
 
+// Message.toolCalls is a JSON column, so its shape is checked on the way out
+const toolCallsSchema = z.array(
+  z.object({
+    id: z.string(),
+    name: z.string(),
+    input: z.unknown(),
+    label: z.string(),
+    status: z.enum(["running", "done", "failed"]),
+    output: z.string().nullable(),
+  }),
+) satisfies z.ZodType<ToolCall[]>;
+
+function parseToolCalls(messageId: string, value: Prisma.JsonValue): ToolCall[] {
+  if (value === null) {
+    return [];
+  }
+  const parsed = toolCallsSchema.safeParse(value);
+  if (!parsed.success) {
+    // Don't break the whole chat over one message's tool history
+    console.error(`Message ${messageId} has malformed toolCalls`, parsed.error);
+    return [];
+  }
+  return parsed.data;
+}
+
 const chatMessageSelect = {
   id: true,
   role: true,
   content: true,
   createdAt: true,
   retrieval: true,
+  toolCalls: true,
   sources: {
     orderBy: { position: "asc" },
     select: {
@@ -50,7 +78,29 @@ function toChatMessage(row: Prisma.MessageGetPayload<{ select: typeof chatMessag
       pageNumber: chunk.pageNumber,
       content: chunk.content,
     })),
+    toolCalls: parseToolCalls(row.id, row.toolCalls),
   };
+}
+
+/** A document a chat is about, as the chat route needs it */
+export interface ChatDocument {
+  id: string;
+  title: string;
+  pageCount: number | null;
+}
+
+/**
+ * The chat's documents that still exist and belong to the user, in the order
+ * they were picked. documentIds is a plain array column (no foreign key), so
+ * a document deleted since the chat started is simply left out.
+ */
+async function findChatDocuments(userId: string, documentIds: string[]) {
+  const documents = await prisma.document.findMany({
+    where: { id: { in: documentIds }, userId },
+    select: { id: true, title: true, status: true, pageCount: true },
+  });
+  const byId = new Map(documents.map((document) => [document.id, document]));
+  return documentIds.flatMap((id) => byId.get(id) ?? []);
 }
 
 /** The user's conversations, most recently active first. */
@@ -85,17 +135,11 @@ export async function getConversation(
     return null;
   }
 
-  // documentIds is a plain array column (no foreign key), so a document
-  // deleted since the conversation started is simply missing here
-  const documents = await prisma.document.findMany({
-    where: { id: { in: conversation.documentIds }, userId },
-    select: { id: true, title: true, status: true },
-  });
-  const byId = new Map(documents.map((document) => [document.id, document]));
+  const documents = await findChatDocuments(userId, conversation.documentIds);
 
   return {
     ...toConversationSummary(conversation),
-    documents: conversation.documentIds.flatMap((id) => byId.get(id) ?? []),
+    documents: documents.map(({ id, title, status }) => ({ id, title, status })),
     messages: conversation.messages.map(toChatMessage),
   };
 }
@@ -139,8 +183,8 @@ export interface ChatHistory {
   turns: { role: "user" | "assistant"; content: string }[];
   /** True if nothing has been said in this conversation yet */
   isEmpty: boolean;
-  /** The documents the chat is about, for retrieval (may include since-deleted ones) */
-  documentIds: string[];
+  /** The chat's documents, for retrieval and tools (deleted ones left out) */
+  documents: ChatDocument[];
 }
 
 /** Recent history to send to Claude and the chat's documents, or null if the user has no such conversation. */
@@ -171,10 +215,11 @@ export async function getChatHistory(
     .map((message) => ({ role: message.role as "user" | "assistant", content: message.content }));
   // The window can open on an assistant reply; Claude needs a user turn first
   const firstUser = turns.findIndex((turn) => turn.role === "user");
+  const documents = await findChatDocuments(userId, conversation.documentIds);
   return {
     turns: firstUser === -1 ? [] : turns.slice(firstUser),
     isEmpty: conversation.messages.length === 0,
-    documentIds: conversation.documentIds,
+    documents: documents.map(({ id, title, pageCount }) => ({ id, title, pageCount })),
   };
 }
 
@@ -188,7 +233,9 @@ export interface ExchangeToSave {
     createdAt: Date;
     retrieval: RetrievalMode;
     /** The passages Claude was given, in prompt order (sources[0] is "[Source 1]") */
-    sources: SourceChunk[];
+    sources: readonly SourceChunk[];
+    /** Tools Claude used, with their results */
+    toolCalls: readonly ToolCall[];
   };
   /** Replaces the conversation's title (the first exchange names the chat) */
   title?: string;
@@ -231,6 +278,14 @@ export async function saveExchange(exchange: ExchangeToSave) {
         tokensUsed: assistant.tokensUsed,
         createdAt: assistantCreatedAt,
         retrieval: assistant.retrieval,
+        toolCalls:
+          assistant.toolCalls.length > 0
+            ? assistant.toolCalls.map((call) => ({
+                ...call,
+                // Parsed from the API's JSON response, so it is a JSON value
+                input: call.input as Prisma.InputJsonValue,
+              }))
+            : undefined,
         sources: {
           // Numbered before filtering: the reply cites them by these numbers
           create: assistant.sources.flatMap((source, i) =>

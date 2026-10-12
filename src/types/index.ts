@@ -62,6 +62,24 @@ export interface ConversationDocument {
   status: DocumentStatus;
 }
 
+/**
+ * A tool Claude used while writing a reply, with what it returned. Stored on
+ * the reply (Message.toolCalls) and streamed live while the reply is written.
+ */
+export interface ToolCall {
+  /** The tool_use ID from the API */
+  id: string;
+  /** The tool's name, e.g. "search_documents" */
+  name: string;
+  /** The arguments Claude passed, as it sent them */
+  input: unknown;
+  /** What the call did, for people: `Searched for "load balancers"` */
+  label: string;
+  status: "running" | "done" | "failed";
+  /** What Claude got back; null while running */
+  output: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -72,6 +90,8 @@ export interface ChatMessage {
   retrieval: RetrievalMode | null;
   /** The passages the reply was based on, by source number. Empty for user messages. */
   sources: ChatSource[];
+  /** Tools Claude used for this reply, in the order it called them. Empty for user messages. */
+  toolCalls: ToolCall[];
 }
 
 /** Everything the chat page needs to render a conversation */
@@ -84,11 +104,13 @@ export interface ConversationDetail extends ConversationSummary {
 
 /**
  * One line of the POST /api/chat response stream (newline-delimited JSON).
- * A stream is any number of `delta`s, then exactly one `done` or `error`.
+ * A stream is any number of `delta`s and `tool` events, then exactly one `done` or `error`.
  */
 export type ChatStreamEvent =
   /** The next piece of the reply */
   | { type: "delta"; text: string }
+  /** A tool call started (status "running") or finished; the latest event for an ID wins */
+  | { type: "tool"; call: ToolCall }
   /** The reply finished and both messages were saved */
   | {
       type: "done";

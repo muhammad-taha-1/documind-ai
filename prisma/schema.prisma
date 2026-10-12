@@ -138,8 +138,9 @@ model Message {
   retrieval      RetrievalMode?
   /// The passages Claude was given, as numbered in the prompt ("[Source N]")
   sources        MessageSource[]
+  /// Tools Claude used for this reply, each with its result: ToolCall[] in src/types.
+  /// One list rather than separate call/result columns, so they can't get out of step.
   toolCalls      Json?
-  toolResults    Json?
   /// Vision attachments (Phase 14), e.g. [{ type: "image", path, mediaType }]
   attachments    Json?
   createdAt      DateTime     @default(now())
