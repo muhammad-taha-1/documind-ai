@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { titleFromMessage } from "./title";
+import { cleanGeneratedTitle, titleFromMessage } from "./title";
 
 describe("titleFromMessage", () => {
   it("uses a short message as-is", () => {
@@ -31,5 +31,30 @@ describe("titleFromMessage", () => {
 
   it("falls back to the default title for blank input", () => {
     expect(titleFromMessage("   ")).toBe("New Chat");
+  });
+});
+
+describe("cleanGeneratedTitle", () => {
+  it.each([
+    ["AWS Load Balancer Types", "AWS Load Balancer Types"],
+    ['"AWS Load Balancer Types"', "AWS Load Balancer Types"],
+    ["“Resume Feedback”", "Resume Feedback"],
+    ["Title: Resume Feedback", "Resume Feedback"],
+    ["# **Resume Feedback**", "Resume Feedback"],
+    ["Resume feedback.", "Resume feedback"],
+    ["Resume  feedback\n\nThis title fits because…", "Resume feedback"],
+  ])("%j -> %j", (raw, expected) => {
+    expect(cleanGeneratedTitle(raw)).toBe(expected);
+  });
+
+  it("shortens a title that ignored the length limit", () => {
+    const title = cleanGeneratedTitle("word ".repeat(30));
+    expect(title?.length).toBeLessThanOrEqual(60);
+    expect(title?.endsWith("…")).toBe(true);
+  });
+
+  it("returns null when nothing usable is left", () => {
+    expect(cleanGeneratedTitle("")).toBeNull();
+    expect(cleanGeneratedTitle('  ""  ')).toBeNull();
   });
 });

@@ -18,6 +18,23 @@ export function formatBytes(bytes: number): string {
   return `${rounded} ${UNITS[unit]}`;
 }
 
+/** A token count at a glance: 950 -> "950", 1234 -> "1.2k", 48210 -> "48k", 1500000 -> "1.5M" */
+export function formatTokenCount(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens < 0) {
+    throw new RangeError(`Invalid token count: ${tokens}`);
+  }
+  const compact = (value: number, unit: string) =>
+    // One decimal below 10 (1.2k), none above (48k), never a trailing ".0"
+    `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)}${unit}`;
+  if (tokens < 1000) {
+    return String(Math.round(tokens));
+  }
+  if (tokens < 999_500) {
+    return compact(tokens / 1000, "k");
+  }
+  return compact(tokens / 1_000_000, "M");
+}
+
 /**
  * A compact "when" for lists, relative to `now`: the time for today,
  * "Yesterday", the weekday within the last week, then the date.

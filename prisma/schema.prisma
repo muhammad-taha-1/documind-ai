@@ -114,36 +114,57 @@ model DocumentChunk {
 }
 
 model Conversation {
-  id          String    @id @default(cuid())
-  title       String    @default("New Chat")
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages    Message[]
-  documentIds String[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  title            String    @default("New Chat")
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages         Message[]
+  documentIds      String[]
+  /// The API's summary of the older messages (a compaction block, kept exactly
+  /// as returned), which Claude reads in their place. Null until the
+  /// conversation first outgrows its context budget.
+  compaction       Json?
+  /// Messages created at or before this time are covered by `compaction`
+  compactedThrough DateTime?
+  createdAt        DateTime  @default(now())
+  /// Last activity: set explicitly when messages are added, and the sidebar
+  /// sorts by it. Deliberately not @updatedAt: renaming a chat or summarizing
+  /// it in the background shouldn't move it to the top of the list.
+  updatedAt        DateTime  @default(now())
 
   @@index([userId])
 }
 
 model Message {
-  id             String       @id @default(cuid())
-  role           MessageRole
-  content        String       @db.Text
-  conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  model          String?
-  tokensUsed     Int?
+  id               String          @id @default(cuid())
+  role             MessageRole
+  content          String          @db.Text
+  conversationId   String
+  conversation     Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  model            String?
+  // Token usage of a reply, summed over every request behind it (tool rounds,
+  // refusal fallbacks). Null for user messages and replies from before Phase 12.
+  /// Prompt tokens billed at the full rate
+  inputTokens      Int?
+  /// Generated tokens, thinking included
+  outputTokens     Int?
+  /// Prompt tokens read from the prompt cache (a tenth of the input rate)
+  cacheReadTokens  Int?
+  /// Prompt tokens written to the prompt cache (1.25x the input rate)
+  cacheWriteTokens Int?
+  /// How much conversation Claude read for this reply: the whole prompt of its
+  /// first request. Decides when the conversation is compacted.
+  contextTokens    Int?
   /// How the documents were searched for this reply (assistant messages from Phase 10 on)
-  retrieval      RetrievalMode?
+  retrieval        RetrievalMode?
   /// The passages Claude was given, as numbered in the prompt ("[Source N]")
-  sources        MessageSource[]
+  sources          MessageSource[]
   /// Tools Claude used for this reply, each with its result: ToolCall[] in src/types.
   /// One list rather than separate call/result columns, so they can't get out of step.
-  toolCalls      Json?
+  toolCalls        Json?
   /// Vision attachments (Phase 14), e.g. [{ type: "image", path, mediaType }]
-  attachments    Json?
-  createdAt      DateTime     @default(now())
+  attachments      Json?
+  createdAt        DateTime        @default(now())
 
   @@index([conversationId])
 }

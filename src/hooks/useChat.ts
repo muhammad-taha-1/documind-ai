@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseApiError } from "@/lib/api";
 import { readNdjson } from "@/lib/chat/stream";
-import type { ChatMessage, ChatStreamEvent, ConversationSummary, ToolCall } from "@/types";
+import type { ChatMessage, ChatStreamEvent, ConversationSummary, RetryReason, ToolCall } from "@/types";
 
 /** A message on its way: shown straight away, with the reply filling in as it streams. */
 export interface PendingExchange {
@@ -12,6 +12,11 @@ export interface PendingExchange {
   reply: string;
   /** Tools Claude is using or has used for this reply, in call order */
   toolCalls: ToolCall[];
+  /**
+   * Set when the server is waiting to retry because Claude is busy, with the
+   * time it will try again (ms since the epoch). Cleared when the reply moves on.
+   */
+  retry: { reason: RetryReason; retryAt: number } | null;
 }
 
 /** Adds a tool call, or replaces it with its latest state (running, then done or failed). */
@@ -68,9 +73,11 @@ export function useChat({
           retrieval: null,
           sources: [],
           toolCalls: [],
+          usage: null,
         },
         reply: "",
         toolCalls: [],
+        retry: null,
       });
 
       try {
@@ -89,11 +96,18 @@ export function useChat({
         for await (const event of readNdjson(response.body) as AsyncGenerator<ChatStreamEvent>) {
           switch (event.type) {
             case "delta":
-              setPending((current) => current && { ...current, reply: current.reply + event.text });
+              setPending((current) => current && { ...current, reply: current.reply + event.text, retry: null });
               break;
             case "tool":
               setPending(
-                (current) => current && { ...current, toolCalls: upsertToolCall(current.toolCalls, event.call) },
+                (current) =>
+                  current && { ...current, toolCalls: upsertToolCall(current.toolCalls, event.call), retry: null },
+              );
+              break;
+            case "retry":
+              setPending(
+                (current) =>
+                  current && { ...current, retry: { reason: event.reason, retryAt: Date.now() + event.delayMs } },
               );
               break;
             case "done":

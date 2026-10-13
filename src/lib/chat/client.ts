@@ -1,5 +1,5 @@
 import { parseApiError } from "@/lib/api";
-import type { ConversationSummary } from "@/types";
+import type { ConversationDocument, ConversationSummary } from "@/types";
 
 // Browser-side calls to the chat API. Each rejects with an Error whose
 // message is safe to show.
@@ -15,6 +15,22 @@ export async function createConversation(documentIds: string[]): Promise<Convers
   }
   const body = (await response.json()) as { conversation: ConversationSummary };
   return body.conversation;
+}
+
+/** Renames a conversation and/or replaces its documents. Resolves with both as they now are. */
+export async function updateConversation(
+  conversationId: string,
+  changes: { title?: string; documentIds?: string[] },
+): Promise<{ conversation: ConversationSummary; documents: ConversationDocument[] }> {
+  const response = await fetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(changes),
+  });
+  if (!response.ok) {
+    throw new Error(parseApiError(await response.text(), "Couldn't save the changes. Please try again."));
+  }
+  return (await response.json()) as { conversation: ConversationSummary; documents: ConversationDocument[] };
 }
 
 export async function deleteConversation(conversationId: string): Promise<void> {

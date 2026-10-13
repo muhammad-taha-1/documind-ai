@@ -6,8 +6,10 @@ import type { ConversationSummary } from "@/types";
 interface ConversationsContextValue {
   /** Most recently active first */
   conversations: ConversationSummary[];
-  /** Adds a conversation, or replaces it if it exists, and moves it to the top */
+  /** Adds a conversation, or replaces it if it exists, and moves it to the top (new activity) */
   upsertConversation: (conversation: ConversationSummary) => void;
+  /** Replaces a conversation where it is, e.g. after a rename, which isn't activity */
+  replaceConversation: (conversation: ConversationSummary) => void;
   removeConversation: (conversationId: string) => void;
 }
 
@@ -35,13 +37,19 @@ export function ConversationsProvider({
     ]);
   }, []);
 
+  const replaceConversation = useCallback((conversation: ConversationSummary) => {
+    setConversations((current) =>
+      current.map((existing) => (existing.id === conversation.id ? conversation : existing)),
+    );
+  }, []);
+
   const removeConversation = useCallback((conversationId: string) => {
     setConversations((current) => current.filter((existing) => existing.id !== conversationId));
   }, []);
 
   const value = useMemo(
-    () => ({ conversations, upsertConversation, removeConversation }),
-    [conversations, upsertConversation, removeConversation],
+    () => ({ conversations, upsertConversation, replaceConversation, removeConversation }),
+    [conversations, upsertConversation, replaceConversation, removeConversation],
   );
   return <ConversationsContext value={value}>{children}</ConversationsContext>;
 }

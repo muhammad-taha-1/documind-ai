@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatDate, formatDateTime, formatShortDate } from "./format";
+import { formatBytes, formatDate, formatDateTime, formatShortDate, formatTokenCount } from "./format";
+
+describe("formatTokenCount", () => {
+  it.each([
+    [0, "0"],
+    [950, "950"],
+    [999, "999"],
+    [1000, "1k"],
+    [1234, "1.2k"],
+    [9_960, "10k"],
+    [48_210, "48k"],
+    [999_499, "999k"],
+    [999_500, "1M"],
+    [1_500_000, "1.5M"],
+  ])("%d -> %s", (tokens, expected) => {
+    expect(formatTokenCount(tokens)).toBe(expected);
+  });
+
+  it("rejects invalid input", () => {
+    expect(() => formatTokenCount(-1)).toThrow(RangeError);
+    expect(() => formatTokenCount(Number.NaN)).toThrow(RangeError);
+  });
+});
 
 describe("formatBytes", () => {
   it.each([

@@ -1,12 +1,17 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { Prisma } from "@/generated/prisma/client";
+import type { ChatTurn, CompactionBlock } from "@/lib/ai/chat";
+import { fitHistory, parseCompactionBlock } from "@/lib/ai/context";
 import { prisma } from "@/lib/db/prisma";
 import type {
   ChatMessage,
   ConversationDetail,
+  ConversationDocument,
   ConversationSummary,
   RetrievalMode,
   SourceChunk,
+  TokenUsage,
   ToolCall,
 } from "@/types";
 
@@ -15,8 +20,9 @@ import type {
 
 const conversationSummarySelect = { id: true, title: true, updatedAt: true } as const;
 
-function toConversationSummary(row: { id: string; title: string; updatedAt: Date }) {
-  return { ...row, updatedAt: row.updatedAt.toISOString() } satisfies ConversationSummary;
+function toConversationSummary({ id, title, updatedAt }: { id: string; title: string; updatedAt: Date }) {
+  // Picked field by field: rows often carry more (documentIds, messages)
+  return { id, title, updatedAt: updatedAt.toISOString() } satisfies ConversationSummary;
 }
 
 // Message.toolCalls is a JSON column, so its shape is checked on the way out
@@ -51,6 +57,10 @@ const chatMessageSelect = {
   createdAt: true,
   retrieval: true,
   toolCalls: true,
+  inputTokens: true,
+  outputTokens: true,
+  cacheReadTokens: true,
+  cacheWriteTokens: true,
   sources: {
     orderBy: { position: "asc" },
     select: {
@@ -79,6 +89,19 @@ function toChatMessage(row: Prisma.MessageGetPayload<{ select: typeof chatMessag
       content: chunk.content,
     })),
     toolCalls: parseToolCalls(row.id, row.toolCalls),
+    // All four are written together, so one null means no usage was recorded
+    usage:
+      row.inputTokens === null ||
+      row.outputTokens === null ||
+      row.cacheReadTokens === null ||
+      row.cacheWriteTokens === null
+        ? null
+        : {
+            inputTokens: row.inputTokens,
+            outputTokens: row.outputTokens,
+            cacheReadTokens: row.cacheReadTokens,
+            cacheWriteTokens: row.cacheWriteTokens,
+          },
   };
 }
 
@@ -123,6 +146,8 @@ export async function getConversation(
     select: {
       ...conversationSummarySelect,
       documentIds: true,
+      compaction: true,
+      compactedThrough: true,
       messages: {
         // System messages are instructions to the model, not part of the chat
         where: { role: { in: ["user", "assistant"] } },
@@ -136,12 +161,21 @@ export async function getConversation(
   }
 
   const documents = await findChatDocuments(userId, conversation.documentIds);
+  const compaction = parseCompactionBlock(conversation.id, conversation.compaction);
 
   return {
     ...toConversationSummary(conversation),
-    documents: documents.map(({ id, title, status }) => ({ id, title, status })),
+    documents: documents.map(toConversationDocument),
     messages: conversation.messages.map(toChatMessage),
+    compaction:
+      compaction?.content && conversation.compactedThrough
+        ? { summary: compaction.content, through: conversation.compactedThrough.toISOString() }
+        : null,
   };
+}
+
+function toConversationDocument({ id, title, status }: ConversationDocument): ConversationDocument {
+  return { id, title, status };
 }
 
 export type CreateConversationResult =
@@ -175,52 +209,153 @@ export async function deleteConversation(userId: string, conversationId: string)
   return count === 1;
 }
 
-/** How many earlier messages Claude sees with each new one (a sliding window) */
-export const HISTORY_MESSAGE_LIMIT = 20;
+export type UpdateConversationResult =
+  | { status: "updated"; conversation: ConversationSummary; documents: ConversationDocument[] }
+  | { status: "not_found" }
+  | { status: "documents_not_found" };
+
+/**
+ * Renames a conversation and/or replaces its documents. As when creating
+ * one, every document must be the user's. Neither change counts as activity,
+ * so the conversation keeps its place in the sidebar.
+ */
+export async function updateConversation(
+  userId: string,
+  conversationId: string,
+  changes: { title?: string; documentIds?: string[] },
+): Promise<UpdateConversationResult> {
+  const { title, documentIds } = changes;
+  if (documentIds) {
+    const owned = await prisma.document.count({ where: { id: { in: documentIds }, userId } });
+    if (owned !== documentIds.length) {
+      return { status: "documents_not_found" };
+    }
+  }
+
+  // updateMany so the userId filter applies
+  const { count } = await prisma.conversation.updateMany({
+    where: { id: conversationId, userId },
+    data: { title, documentIds },
+  });
+  if (count === 0) {
+    return { status: "not_found" };
+  }
+
+  const row = await prisma.conversation.findUniqueOrThrow({
+    where: { id: conversationId },
+    select: { ...conversationSummarySelect, documentIds: true },
+  });
+  const documents = await findChatDocuments(userId, row.documentIds);
+  return {
+    status: "updated",
+    conversation: toConversationSummary(row),
+    documents: documents.map(toConversationDocument),
+  };
+}
 
 export interface ChatHistory {
-  /** The latest messages, oldest first, always starting with a user message */
-  turns: { role: "user" | "assistant"; content: string }[];
+  /** The summary of the older messages, if the conversation has been compacted */
+  compaction: CompactionBlock | null;
+  /** The messages after the summary, oldest first, starting with a user message */
+  turns: ChatTurn[];
   /** True if nothing has been said in this conversation yet */
   isEmpty: boolean;
   /** The chat's documents, for retrieval and tools (deleted ones left out) */
   documents: ChatDocument[];
 }
 
-/** Recent history to send to Claude and the chat's documents, or null if the user has no such conversation. */
-export async function getChatHistory(
-  userId: string,
-  conversationId: string,
-  limit = HISTORY_MESSAGE_LIMIT,
-): Promise<ChatHistory | null> {
+/**
+ * What Claude sees of a conversation (see context.ts): the summary of the
+ * older messages, if there is one, and every message after it. Also the
+ * chat's documents. Null if the user has no such conversation.
+ */
+export async function getChatHistory(userId: string, conversationId: string): Promise<ChatHistory | null> {
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, userId },
-    select: {
-      documentIds: true,
-      messages: {
-        where: { role: { in: ["user", "assistant"] } },
-        orderBy: { createdAt: "desc" },
-        take: limit,
-        select: { role: true, content: true },
-      },
-    },
+    select: { documentIds: true, compaction: true, compactedThrough: true },
   });
   if (!conversation) {
     return null;
   }
 
-  const turns = conversation.messages
-    .reverse()
-    // The query only selects user and assistant messages
-    .map((message) => ({ role: message.role as "user" | "assistant", content: message.content }));
-  // The window can open on an assistant reply; Claude needs a user turn first
-  const firstUser = turns.findIndex((turn) => turn.role === "user");
+  const compaction = parseCompactionBlock(conversationId, conversation.compaction);
+  const messages = await prisma.message.findMany({
+    where: {
+      conversationId,
+      role: { in: ["user", "assistant"] },
+      // Without a usable summary, fall back to the whole conversation
+      ...(compaction && conversation.compactedThrough && { createdAt: { gt: conversation.compactedThrough } }),
+    },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, content: true },
+  });
+
+  // The query only selects user and assistant messages
+  const turns = messages.map((message) => ({ role: message.role as ChatTurn["role"], content: message.content }));
+  const fitted = fitHistory(turns);
+  if (fitted.length < turns.length) {
+    console.warn(
+      `Conversation ${conversationId}: history over budget, sending the last ${fitted.length} of ${turns.length} messages`,
+    );
+  }
+
   const documents = await findChatDocuments(userId, conversation.documentIds);
   return {
-    turns: firstUser === -1 ? [] : turns.slice(firstUser),
-    isEmpty: conversation.messages.length === 0,
+    compaction,
+    turns: fitted,
+    isEmpty: compaction === null && messages.length === 0,
     documents: documents.map(({ id, title, pageCount }) => ({ id, title, pageCount })),
   };
+}
+
+/** A conversation as compaction needs it: its current summary and the messages after it */
+export async function getCompactionState(conversationId: string) {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    select: { compaction: true, compactedThrough: true },
+  });
+  if (!conversation) {
+    return null;
+  }
+  const compaction = parseCompactionBlock(conversationId, conversation.compaction);
+  const messages = await prisma.message.findMany({
+    where: {
+      conversationId,
+      role: { in: ["user", "assistant"] },
+      ...(compaction && conversation.compactedThrough && { createdAt: { gt: conversation.compactedThrough } }),
+    },
+    orderBy: { createdAt: "asc" },
+    select: { role: true, content: true, createdAt: true },
+  });
+  return {
+    compaction,
+    // As stored, even if the block is unusable: saveCompaction's compare-and-set
+    // checks it to make sure nobody else compacted in the meantime
+    compactedThrough: conversation.compactedThrough,
+    messages: messages.map((message) => ({ ...message, role: message.role as ChatTurn["role"] })),
+  };
+}
+
+/**
+ * Stores a new summary covering every message up to `through`, unless the
+ * conversation was compacted by someone else since `expectedThrough` was
+ * read (two replies finishing at once can both try). False if it was, or if
+ * the conversation is gone.
+ */
+export async function saveCompaction(
+  conversationId: string,
+  {
+    block,
+    through,
+    expectedThrough,
+  }: { block: Anthropic.Beta.BetaCompactionBlock; through: Date; expectedThrough: Date | null },
+): Promise<boolean> {
+  const { count } = await prisma.conversation.updateMany({
+    where: { id: conversationId, compactedThrough: expectedThrough },
+    // The API's response is JSON, so the block is a JSON value
+    data: { compaction: block as unknown as Prisma.InputJsonValue, compactedThrough: through },
+  });
+  return count === 1;
 }
 
 export interface ExchangeToSave {
@@ -229,7 +364,9 @@ export interface ExchangeToSave {
   assistant: {
     content: string;
     model: string;
-    tokensUsed: number;
+    usage: TokenUsage;
+    /** The whole prompt of the reply's first request, in tokens */
+    contextTokens: number;
     createdAt: Date;
     retrieval: RetrievalMode;
     /** The passages Claude was given, in prompt order (sources[0] is "[Source 1]") */
@@ -275,7 +412,8 @@ export async function saveExchange(exchange: ExchangeToSave) {
         role: "assistant",
         content: assistant.content,
         model: assistant.model,
-        tokensUsed: assistant.tokensUsed,
+        ...assistant.usage,
+        contextTokens: assistant.contextTokens,
         createdAt: assistantCreatedAt,
         retrieval: assistant.retrieval,
         toolCalls:
@@ -299,7 +437,7 @@ export async function saveExchange(exchange: ExchangeToSave) {
     });
     const conversation = await tx.conversation.update({
       where: { id: conversationId },
-      // Setting updatedAt explicitly: a title-less update would otherwise change nothing
+      // New messages are activity: move the chat to the top of the sidebar
       data: { updatedAt: new Date(), ...(title !== undefined && { title }) },
       select: conversationSummarySelect,
     });

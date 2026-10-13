@@ -1,7 +1,11 @@
+import { after } from "next/server";
 import { describeChatError, generateChatReply } from "@/lib/ai/chat";
+import { compactConversation } from "@/lib/ai/compaction";
+import { COMPACT_AT_TOKENS } from "@/lib/ai/context";
 import { buildRAGPrompt } from "@/lib/ai/prompts";
 import { type RetrievedContext, retrieveContext } from "@/lib/ai/rag";
 import { SourceList } from "@/lib/ai/sources";
+import { generateTitle } from "@/lib/ai/title";
 import { createToolbox } from "@/lib/ai/tools";
 import { jsonError, readJsonBody } from "@/lib/api";
 import { getSession } from "@/lib/auth";
@@ -44,6 +48,10 @@ function logRetrieval(conversationId: string, { mode, sources }: RetrievedContex
  * The question and answer are saved together once the reply completes. A
  * failed, refused or abandoned reply saves nothing, so the user can simply
  * send the message again.
+ *
+ * The first message also names the chat (a small model writes the title
+ * while Claude answers), and a conversation that has grown past its context
+ * budget is summarized in the background once the response has finished.
  */
 export async function POST(request: Request) {
   const session = await getSession();
@@ -73,6 +81,19 @@ export async function POST(request: Request) {
   const generation = new AbortController();
   request.signal.addEventListener("abort", () => generation.abort());
 
+  // Set by the stream if this reply took the conversation over its budget.
+  // after() runs once the response has finished, so the summary is written
+  // without anyone waiting for it.
+  let needsCompaction = false;
+  after(async () => {
+    if (!needsCompaction) return;
+    try {
+      await compactConversation(conversationId);
+    } catch (error) {
+      console.error(`Compacting conversation ${conversationId} failed`, error);
+    }
+  });
+
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -81,6 +102,10 @@ export async function POST(request: Request) {
           controller.enqueue(encoder.encode(ndjsonLine(event)));
         }
       };
+
+      // Named alongside the reply, so the title costs no waiting time. Never
+      // rejects; null means fall back to the message itself.
+      const title = history.isEmpty ? generateTitle(message, { signal: generation.signal }) : null;
 
       try {
         const documentIds = history.documents.map((document) => document.id);
@@ -109,10 +134,12 @@ export async function POST(request: Request) {
         const reply = await generateChatReply(
           [...history.turns, { role: "user", content: buildRAGPrompt(message, context, history.documents) }],
           {
+            compaction: history.compaction ?? undefined,
             toolbox,
             signal: generation.signal,
             onText: (text) => send({ type: "delta", text }),
             onToolCall: (call) => send({ type: "tool", call }),
+            onRetry: ({ reason, delayMs }) => send({ type: "retry", reason, delayMs }),
           },
         );
 
@@ -137,15 +164,20 @@ export async function POST(request: Request) {
           assistant: {
             content: reply.text,
             model: reply.model,
-            tokensUsed: reply.tokensUsed,
+            usage: reply.usage,
+            contextTokens: reply.contextTokens,
             createdAt: new Date(),
             retrieval: context.mode,
             sources: sources.all,
             toolCalls: reply.toolCalls,
           },
-          title: history.isEmpty ? titleFromMessage(message) : undefined,
+          title: title ? ((await title) ?? titleFromMessage(message)) : undefined,
         });
         send({ type: "done", ...saved });
+
+        // Measured, not estimated: how many tokens Claude actually read for this
+        // reply. The next reply reads all that again plus this exchange.
+        needsCompaction = reply.contextTokens > COMPACT_AT_TOKENS;
       } catch (error) {
         if (generation.signal.aborted) {
           return; // The browser left; there's no one to tell

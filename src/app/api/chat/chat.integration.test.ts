@@ -3,11 +3,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatReply } from "@/lib/ai/chat";
+import { COMPACT_AT_TOKENS } from "@/lib/ai/context";
 import { buildRAGPrompt } from "@/lib/ai/prompts";
 import { FULL_TEXT_MAX_CHARACTERS } from "@/lib/ai/rag";
 import { prisma } from "@/lib/db/prisma";
 import { toVectorLiteral } from "@/lib/db/vectors";
-import { HISTORY_MESSAGE_LIMIT } from "@/lib/chat/queries";
 import { readNdjson } from "@/lib/chat/stream";
 import { makeVector } from "@/test/embeddings";
 import type { ChatStreamEvent, ToolCall } from "@/types";
@@ -30,7 +30,29 @@ vi.mock("@/lib/ai/embeddings", async (importOriginal) => ({
   generateEmbedding,
 }));
 
+// Titles come from a small model; scripted per test
+const generateTitle = vi.hoisted(() => vi.fn<(message: string) => Promise<string | null>>());
+vi.mock("@/lib/ai/title", () => ({ generateTitle }));
+
+// Compaction has its own tests; here, only whether the route asks for it
+const compactConversation = vi.hoisted(() => vi.fn<(conversationId: string) => Promise<string>>());
+vi.mock("@/lib/ai/compaction", () => ({ compactConversation }));
+
+// after() needs a live Next.js request; collect the callbacks so tests can run them
+const scheduled = vi.hoisted(() => [] as Array<() => unknown>);
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (callback: () => unknown) => scheduled.push(callback),
+}));
+
 const { POST } = await import("./route");
+
+/** Runs what the route left for after the response */
+async function runScheduled() {
+  for (const callback of scheduled.splice(0)) await callback();
+}
+
+const USAGE = { inputTokens: 30, outputTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
 /** What Claude is sent for a chat with no searchable documents */
 const withoutDocuments = (question: string) =>
@@ -72,7 +94,8 @@ function replyWith(pieces: string[], overrides: Partial<ChatReply> = {}): Genera
       text: pieces.join(""),
       model: "claude-test",
       stopReason: "end_turn",
-      tokensUsed: 42,
+      usage: USAGE,
+      contextTokens: 30,
       toolCalls: [],
       ...overrides,
     };
@@ -101,7 +124,7 @@ function replyUsingTools(calls: [name: string, input: unknown][], answer: string
       toolCalls.push(call);
     }
     onText(answer);
-    return { text: answer, model: "claude-test", stopReason: "end_turn", tokensUsed: 42, toolCalls };
+    return { text: answer, model: "claude-test", stopReason: "end_turn", usage: USAGE, contextTokens: 30, toolCalls };
   };
 }
 
@@ -138,6 +161,20 @@ const longText = (label: string) => `${label} ${"filler ".repeat(300)}`;
 const findMessages = (conversationId: string) =>
   prisma.message.findMany({ where: { conversationId }, orderBy: { createdAt: "asc" } });
 
+/** `count` earlier messages, alternating user/assistant a second apart: "message 0", "message 1", … */
+async function createMessages(conversationId: string, count: number) {
+  const start = Date.now() - 60 * 60_000;
+  await prisma.message.createMany({
+    data: Array.from({ length: count }, (_, i) => ({
+      conversationId,
+      role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `message ${i}`,
+      createdAt: new Date(start + i * 1000),
+    })),
+  });
+  return findMessages(conversationId);
+}
+
 beforeAll(async () => {
   const runId = randomUUID();
   ownerId = (await prisma.user.create({ data: { email: `owner-${runId}@test.local` } })).id;
@@ -149,6 +186,9 @@ beforeEach(async () => {
   await prisma.document.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
   generateChatReply.mockReset();
   generateEmbedding.mockReset();
+  generateTitle.mockReset().mockResolvedValue(null);
+  compactConversation.mockReset().mockResolvedValue("compacted");
+  scheduled.length = 0;
   signInAs(ownerId);
   // The route logs each retrieval for threshold tuning
   vi.spyOn(console, "info").mockImplementation(() => {});
@@ -160,9 +200,10 @@ afterAll(async () => {
 });
 
 describe("POST /api/chat", () => {
-  it("streams the reply, then saves both messages and names the chat", async () => {
+  it("streams the reply, then saves both messages with the reply's usage, and names the chat", async () => {
     const id = await createConversation(ownerId);
     generateChatReply.mockImplementation(replyWith(["Hello", " there", "!"]));
+    generateTitle.mockResolvedValue("Greeting Claude");
 
     const response = await POST(chatRequest({ conversationId: id, message: "  Hi Claude  " }));
 
@@ -184,14 +225,18 @@ describe("POST /api/chat", () => {
         content: "Hello there!",
         retrieval: "NO_DOCUMENTS",
         sources: [],
+        usage: USAGE,
       },
-      conversation: { id, title: "Hi Claude" },
+      conversation: { id, title: "Greeting Claude" },
     });
+    expect(generateTitle).toHaveBeenCalledWith("Hi Claude", expect.anything());
 
     const saved = await findMessages(id);
-    expect(saved.map((m) => [m.role, m.content, m.model, m.tokensUsed])).toEqual([
-      ["user", "Hi Claude", null, null],
-      ["assistant", "Hello there!", "claude-test", 42],
+    expect(
+      saved.map((m) => [m.role, m.content, m.model, m.inputTokens, m.outputTokens, m.contextTokens]),
+    ).toEqual([
+      ["user", "Hi Claude", null, null, null, null],
+      ["assistant", "Hello there!", "claude-test", 30, 12, 30],
     ]);
     // The message is sent trimmed, as the only turn
     expect(generateChatReply.mock.calls[0][0]).toEqual([
@@ -217,33 +262,102 @@ describe("POST /api/chat", () => {
       { role: "user", content: withoutDocuments("Second question") },
     ]);
     const conversation = await prisma.conversation.findUniqueOrThrow({ where: { id } });
+    // No generated title (the mock returns null), so the first question names the chat
     expect(conversation.title).toBe("First question");
+    expect(generateTitle).toHaveBeenCalledOnce();
     // Each exchange moves the chat to the top of the sidebar
     expect(conversation.updatedAt.getTime()).toBeGreaterThan(afterFirst.updatedAt.getTime());
     expect(events.at(-1)).toMatchObject({ type: "done", conversation: { title: "First question" } });
   });
 
-  it(`sends at most the last ${HISTORY_MESSAGE_LIMIT} messages, starting with a user turn`, async () => {
+  it("sends the whole conversation, not a sliding window", async () => {
     const id = await createConversation(ownerId);
-    const start = Date.now() - 60_000;
-    // 25 messages alternating user/assistant, so the newest 20 open on an assistant reply
-    await prisma.message.createMany({
-      data: Array.from({ length: 25 }, (_, i) => ({
-        conversationId: id,
-        role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
-        content: `message ${i}`,
-        createdAt: new Date(start + i * 1000),
-      })),
+    await createMessages(id, 25);
+    generateChatReply.mockImplementation(replyWith(["ok"]));
+
+    await readEvents(await POST(chatRequest({ conversationId: id, message: "latest" })));
+
+    const [turns, options] = generateChatReply.mock.calls[0];
+    expect(turns).toHaveLength(26);
+    expect(turns[0]).toEqual({ role: "user", content: "message 0" });
+    expect(turns.at(-1)).toEqual({ role: "user", content: withoutDocuments("latest") });
+    expect(options.compaction).toBeUndefined();
+  });
+
+  it("sends the summary of a compacted conversation, then only the messages after it", async () => {
+    const id = await createConversation(ownerId);
+    const messages = await createMessages(id, 6);
+    const block = { type: "compaction", content: "Summary of messages 0-3", signature: "sig", encrypted_content: null };
+    await prisma.conversation.update({
+      where: { id },
+      data: { compaction: block, compactedThrough: messages[3].createdAt },
     });
     generateChatReply.mockImplementation(replyWith(["ok"]));
 
     await readEvents(await POST(chatRequest({ conversationId: id, message: "latest" })));
 
-    const turns = generateChatReply.mock.calls[0][0];
-    expect(turns[0]).toEqual({ role: "user", content: "message 6" });
-    expect(turns.at(-2)).toEqual({ role: "user", content: "message 24" });
-    expect(turns.at(-1)).toEqual({ role: "user", content: withoutDocuments("latest") });
-    expect(turns).toHaveLength(HISTORY_MESSAGE_LIMIT);
+    const [turns, options] = generateChatReply.mock.calls[0];
+    expect(options.compaction).toEqual(block);
+    expect(turns).toEqual([
+      { role: "user", content: "message 4" },
+      { role: "assistant", content: "message 5" },
+      { role: "user", content: withoutDocuments("latest") },
+    ]);
+    // Compacted, so not new: no title
+    expect(generateTitle).not.toHaveBeenCalled();
+  });
+
+  it("compacts the conversation after a reply that read more than the budget", async () => {
+    const id = await createConversation(ownerId);
+    generateChatReply.mockImplementation(replyWith(["ok"], { contextTokens: COMPACT_AT_TOKENS + 1 }));
+
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Hi" })));
+    // Not while the user waits: after the response
+    expect(events.at(-1)?.type).toBe("done");
+    expect(compactConversation).not.toHaveBeenCalled();
+
+    await runScheduled();
+    expect(compactConversation).toHaveBeenCalledWith(id);
+  });
+
+  it("doesn't compact a conversation within budget, or after a failed reply", async () => {
+    const id = await createConversation(ownerId);
+    generateChatReply.mockImplementation(replyWith(["ok"], { contextTokens: COMPACT_AT_TOKENS }));
+    await readEvents(await POST(chatRequest({ conversationId: id, message: "Hi" })));
+    generateChatReply.mockImplementation(
+      replyWith([], { stopReason: "refusal", contextTokens: COMPACT_AT_TOKENS * 2 }),
+    );
+    await readEvents(await POST(chatRequest({ conversationId: id, message: "Again" })));
+
+    await runScheduled();
+    expect(compactConversation).not.toHaveBeenCalled();
+  });
+
+  it("logs a failed compaction without affecting the saved reply", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const id = await createConversation(ownerId);
+    compactConversation.mockRejectedValue(new Error("API down"));
+    generateChatReply.mockImplementation(replyWith(["ok"], { contextTokens: COMPACT_AT_TOKENS + 1 }));
+
+    await readEvents(await POST(chatRequest({ conversationId: id, message: "Hi" })));
+    await runScheduled();
+
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(id), expect.any(Error));
+    expect(await findMessages(id)).toHaveLength(2);
+    consoleError.mockRestore();
+  });
+
+  it("tells the browser when it's waiting to retry", async () => {
+    const id = await createConversation(ownerId);
+    generateChatReply.mockImplementation(async (turns, options) => {
+      options.onRetry?.({ reason: "rate_limited", delayMs: 2000 });
+      return replyWith(["ok"])(turns, options);
+    });
+
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Hi" })));
+
+    expect(events[0]).toEqual({ type: "retry", reason: "rate_limited", delayMs: 2000 });
+    expect(events.at(-1)?.type).toBe("done");
   });
 
   it("saves nothing when Claude declines the request", async () => {

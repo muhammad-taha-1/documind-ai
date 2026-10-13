@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 // Reads ANTHROPIC_API_KEY from the environment. The SDK retries 408/409/429/5xx
-// and connection errors twice with backoff by default — before any text has
-// streamed, so a retry is invisible to the user.
+// and connection errors twice with backoff by default. Chat replies turn that
+// off and retry themselves, so they can tell the user they're waiting (chat.ts).
 export const anthropic = new Anthropic();
 
 /** The model behind chat. Change it here and nowhere else. */
@@ -21,3 +21,9 @@ export const CHAT_EFFORT = "low";
  * room. Streaming keeps a high limit safe from HTTP timeouts.
  */
 export const CHAT_MAX_TOKENS = 64_000;
+
+/**
+ * Names conversations. A six-word title doesn't need Opus: Haiku is a small,
+ * fast model at a fraction of the price, and it runs alongside the reply.
+ */
+export const TITLE_MODEL = "claude-haiku-5-5";

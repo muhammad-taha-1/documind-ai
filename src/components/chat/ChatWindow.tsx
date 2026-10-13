@@ -1,9 +1,9 @@
 "use client";
 
-import { MessagesSquare } from "lucide-react";
-import { type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
+import { MessagesSquare, ScrollText } from "lucide-react";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ChatMessage } from "@/types";
+import type { ChatMessage, ConversationCompaction } from "@/types";
 import { MessageBubble } from "./MessageBubble";
 
 // How close to the bottom (px) still counts as "following along"
@@ -16,11 +16,14 @@ const STICK_THRESHOLD = 80;
  */
 export function ChatWindow({
   messages,
+  compaction = null,
   isLoading = false,
   isStreaming = false,
   emptyState,
 }: {
   messages: ChatMessage[];
+  /** If set, marks where Claude's view of the conversation switches from the summary to the messages */
+  compaction?: ConversationCompaction | null;
   /** Shows a placeholder reply while waiting for the assistant */
   isLoading?: boolean;
   /** A reply is still arriving. Screen readers wait for it to finish instead of reading every fragment. */
@@ -56,6 +59,10 @@ export function ChatWindow({
     stickToBottom.current = distanceFromBottom < STICK_THRESHOLD;
   }
 
+  // The marker goes after the last message the summary covers
+  const summarizedThrough = compaction ? Date.parse(compaction.through) : Number.NEGATIVE_INFINITY;
+  const lastSummarized = messages.findLastIndex((message) => Date.parse(message.createdAt) <= summarizedThrough);
+
   if (messages.length === 0 && !isLoading) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
@@ -75,8 +82,11 @@ export function ChatWindow({
       aria-busy={isStreaming}
     >
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+        {messages.map((message, i) => (
+          <Fragment key={message.id}>
+            <MessageBubble message={message} />
+            {i === lastSummarized && compaction && <CompactionMarker summary={compaction.summary} />}
+          </Fragment>
         ))}
         {isLoading && (
           <div className="grid gap-2" role="status" aria-label="Assistant is thinking">
@@ -87,5 +97,24 @@ export function ChatWindow({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Where Claude's view of the conversation changes: the messages above are
+ * still shown here, but Claude now reads them only as this summary.
+ */
+function CompactionMarker({ summary }: { summary: string }) {
+  return (
+    <details className="group/summary rounded-md border border-dashed bg-muted/20 text-xs">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-2 text-muted-foreground [&::-webkit-details-marker]:hidden">
+        <ScrollText className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1">
+          Earlier messages summarized: Claude now remembers the conversation above as a summary
+        </span>
+        <span className="shrink-0 underline-offset-2 group-open/summary:hidden hover:underline">Show</span>
+      </summary>
+      <p className="border-t border-dashed px-3 py-2.5 leading-relaxed whitespace-pre-wrap">{summary}</p>
+    </details>
   );
 }

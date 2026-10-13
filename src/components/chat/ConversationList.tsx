@@ -1,9 +1,9 @@
 "use client";
 
-import { Ellipsis, LoaderCircle, MessageSquare, Trash2 } from "lucide-react";
+import { Ellipsis, LoaderCircle, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { LocalTime } from "@/components/common/LocalTime";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +21,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { deleteConversation } from "@/lib/chat/client";
+import { Input } from "@/components/ui/input";
+import { deleteConversation, updateConversation } from "@/lib/chat/client";
+import { MAX_TITLE_LENGTH } from "@/lib/chat/validation";
 import type { ConversationSummary } from "@/types";
 import { useConversations } from "./ConversationsProvider";
 
@@ -29,6 +31,7 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { conversations } = useConversations();
   const [toDelete, setToDelete] = useState<ConversationSummary | null>(null);
+  const [toRename, setToRename] = useState<ConversationSummary | null>(null);
 
   if (conversations.length === 0) {
     return <p className="px-2 py-1 text-xs text-muted-foreground">No chats yet.</p>;
@@ -70,6 +73,10 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
                   <Ellipsis />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setToRename(conversation)}>
+                    <Pencil />
+                    Rename
+                  </DropdownMenuItem>
                   <DropdownMenuItem variant="destructive" onClick={() => setToDelete(conversation)}>
                     <Trash2 />
                     Delete
@@ -81,7 +88,90 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </ul>
       <DeleteConversationDialog conversation={toDelete} onClose={() => setToDelete(null)} />
+      <RenameConversationDialog conversation={toRename} onClose={() => setToRename(null)} />
     </>
+  );
+}
+
+function RenameConversationDialog({
+  conversation,
+  onClose,
+}: {
+  conversation: ConversationSummary | null;
+  onClose: () => void;
+}) {
+  const { replaceConversation } = useConversations();
+  const [title, setTitle] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Each opening starts from the chat's current title
+  const [shownFor, setShownFor] = useState<ConversationSummary | null>(null);
+  if (conversation !== shownFor) {
+    setShownFor(conversation);
+    if (conversation) {
+      setTitle(conversation.title);
+      setError(null);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!conversation) return;
+    const next = title.replace(/\s+/g, " ").trim();
+    if (next === conversation.title) {
+      onClose();
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      const updated = await updateConversation(conversation.id, { title: next });
+      replaceConversation(updated.conversation);
+      onClose();
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : "Couldn't rename the chat.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={conversation !== null}
+      onOpenChange={(open) => {
+        if (!open && !pending) onClose();
+      }}
+    >
+      <DialogContent>
+        <form onSubmit={handleSubmit} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Rename chat</DialogTitle>
+          </DialogHeader>
+          <label htmlFor="rename-conversation" className="sr-only">
+            Chat title
+          </label>
+          <Input
+            id="rename-conversation"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            maxLength={MAX_TITLE_LENGTH}
+            disabled={pending}
+            aria-invalid={error !== null || undefined}
+            autoFocus
+            onFocus={(event) => event.target.select()}
+          />
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" disabled={pending} />}>Cancel</DialogClose>
+            <Button type="submit" disabled={pending || !title.trim()}>
+              {pending && <LoaderCircle className="animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

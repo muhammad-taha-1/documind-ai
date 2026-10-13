@@ -36,6 +36,20 @@ function createRequest(body: unknown, rawBody = JSON.stringify(body)) {
 const itemContext = (id: string) => ({ params: Promise.resolve({ id }) });
 const getOne = (id: string) =>
   item.GET(new Request(`http://localhost/api/chat/conversations/${id}`), itemContext(id));
+const patchOne = (id: string, body: unknown) => {
+  const raw = JSON.stringify(body);
+  return item.PATCH(
+    new Request(`http://localhost/api/chat/conversations/${id}`, {
+      method: "PATCH",
+      body: raw,
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(new TextEncoder().encode(raw).byteLength),
+      },
+    }),
+    itemContext(id),
+  );
+};
 const deleteOne = (id: string) =>
   item.DELETE(
     new Request(`http://localhost/api/chat/conversations/${id}`, { method: "DELETE" }),
@@ -50,11 +64,7 @@ async function createDocument(userId: string, title = "Doc"): Promise<string> {
 }
 
 async function createConversationRow(userId: string, documentIds: string[], updatedAt?: Date) {
-  const { id } = await prisma.conversation.create({ data: { userId, documentIds } });
-  if (updatedAt) {
-    // @updatedAt is set by Prisma on every write, so pin it with raw SQL
-    await prisma.$executeRaw`UPDATE "Conversation" SET "updatedAt" = ${updatedAt} WHERE id = ${id}`;
-  }
+  const { id } = await prisma.conversation.create({ data: { userId, documentIds, updatedAt } });
   return id;
 }
 
@@ -183,7 +193,17 @@ describe("GET /api/chat/conversations/:id", () => {
       data: [
         { conversationId: id, role: "user", content: "Hi", createdAt: new Date("2026-01-01T10:00Z") },
         { conversationId: id, role: "system", content: "internal", createdAt: new Date("2026-01-01T10:00:30Z") },
-        { conversationId: id, role: "assistant", content: "Hello!", createdAt: new Date("2026-01-01T10:01Z") },
+        {
+          conversationId: id,
+          role: "assistant",
+          content: "Hello!",
+          createdAt: new Date("2026-01-01T10:01Z"),
+          inputTokens: 12,
+          outputTokens: 34,
+          cacheReadTokens: 56,
+          cacheWriteTokens: 78,
+          contextTokens: 146,
+        },
       ],
     });
 
@@ -206,6 +226,7 @@ describe("GET /api/chat/conversations/:id", () => {
         retrieval: null,
         sources: [],
         toolCalls: [],
+        usage: null,
       },
       {
         id: expect.any(String),
@@ -215,8 +236,10 @@ describe("GET /api/chat/conversations/:id", () => {
         retrieval: null,
         sources: [],
         toolCalls: [],
+        usage: { inputTokens: 12, outputTokens: 34, cacheReadTokens: 56, cacheWriteTokens: 78 },
       },
     ]);
+    expect(conversation.compaction).toBeNull();
   });
 
   it("returns the tools each reply used, skipping a record that isn't valid", async () => {
@@ -314,6 +337,76 @@ describe("GET /api/chat/conversations/:id", () => {
   it("requires sign-in", async () => {
     signInAs(null);
     expect((await getOne(randomUUID())).status).toBe(401);
+  });
+});
+
+describe("PATCH /api/chat/conversations/:id", () => {
+  const lastWeek = new Date("2026-01-01T00:00:00Z");
+
+  it("renames a conversation without moving it up the list", async () => {
+    const id = await createConversationRow(ownerId, [], lastWeek);
+
+    const response = await patchOne(id, { title: "  Quarterly\n review  " });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { conversation: ConversationSummary };
+    // Whitespace tidied; a rename isn't activity, so the time stays
+    expect(body.conversation).toEqual({ id, title: "Quarterly review", updatedAt: lastWeek.toISOString() });
+    expect((await prisma.conversation.findUniqueOrThrow({ where: { id } })).title).toBe("Quarterly review");
+  });
+
+  it("replaces the documents, returning them in the new order", async () => {
+    const first = await createDocument(ownerId, "First");
+    const second = await createDocument(ownerId, "Second");
+    const id = await createConversationRow(ownerId, [first], lastWeek);
+
+    const response = await patchOne(id, { documentIds: [second, first, second] });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { documents: unknown };
+    expect(body.documents).toEqual([
+      { id: second, title: "Second", status: "READY" },
+      { id: first, title: "First", status: "READY" },
+    ]);
+    const row = await prisma.conversation.findUniqueOrThrow({ where: { id } });
+    expect(row.documentIds).toEqual([second, first]);
+    expect(row.updatedAt).toEqual(lastWeek);
+  });
+
+  it("refuses another user's document, changing nothing", async () => {
+    const mine = await createDocument(ownerId);
+    const theirs = await createDocument(otherUserId);
+    const id = await createConversationRow(ownerId, [mine]);
+
+    const response = await patchOne(id, { title: "New", documentIds: [mine, theirs] });
+
+    expect(response.status).toBe(403);
+    const row = await prisma.conversation.findUniqueOrThrow({ where: { id } });
+    expect(row).toMatchObject({ title: "New Chat", documentIds: [mine] });
+  });
+
+  it.each([
+    [{}, /Nothing to update/],
+    [{ title: "   " }, /can't be empty/],
+    [{ title: "x".repeat(101) }, /up to 100 characters/],
+    [{ documentIds: [] }, /at least one document/],
+  ])("rejects %j", async (body, message) => {
+    const id = await createConversationRow(ownerId, []);
+    const response = await patchOne(id, body);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(message);
+  });
+
+  it("can't change another user's conversation", async () => {
+    const id = await createConversationRow(otherUserId, []);
+    expect((await patchOne(id, { title: "Mine now" })).status).toBe(404);
+    expect((await prisma.conversation.findUniqueOrThrow({ where: { id } })).title).toBe("New Chat");
+  });
+
+  it("requires sign-in", async () => {
+    const id = await createConversationRow(ownerId, []);
+    signInAs(null);
+    expect((await patchOne(id, { title: "x" })).status).toBe(401);
   });
 });
 

@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import { LocalTime } from "@/components/common/LocalTime";
 import type { ChatMessage } from "@/types";
 import { MessageSources } from "./MessageSources";
+import { MessageTokenUsage } from "./TokenUsage";
 import { ToolCallDisplay } from "./ToolCallDisplay";
 
 // react-markdown never renders raw HTML from the text and strips unsafe URLs
@@ -23,7 +24,7 @@ const markdownComponents: Components = {
 export function MessageBubble({
   message,
 }: {
-  message: Pick<ChatMessage, "role" | "content" | "createdAt" | "retrieval" | "sources" | "toolCalls">;
+  message: Pick<ChatMessage, "role" | "content" | "createdAt" | "retrieval" | "sources" | "toolCalls" | "usage">;
 }) {
   const isUser = message.role === "user";
 
@@ -52,11 +53,11 @@ export function MessageBubble({
           <MessageSources retrieval={message.retrieval} sources={message.sources} />
         </>
       )}
-      <LocalTime
-        iso={message.createdAt}
-        variant="full"
-        className="px-1 text-xs text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100"
-      />
+      {/* Details on hover, so they don't crowd the conversation */}
+      <div className="flex gap-2 px-1 text-xs text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100">
+        <LocalTime iso={message.createdAt} variant="full" />
+        {message.usage && <MessageTokenUsage usage={message.usage} className="tabular-nums" />}
+      </div>
     </div>
   );
 }

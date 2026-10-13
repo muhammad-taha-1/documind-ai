@@ -12,7 +12,9 @@ vi.mock("./anthropic", () => ({
   CHAT_MAX_TOKENS: 1000,
 }));
 
-const { describeChatError, generateChatReply, MAX_TOOL_ROUNDS } = await import("./chat");
+const { describeChatError, generateChatReply, MAX_RETRIES, MAX_TOOL_ROUNDS, retryDelay, usageOf } = await import(
+  "./chat"
+);
 const { RAG_SYSTEM_PROMPT } = await import("./prompts");
 
 type StreamEvent = Anthropic.Beta.BetaRawMessageStreamEvent;
@@ -84,7 +86,9 @@ describe("generateChatReply", () => {
       text: "Hello, world",
       model: "test-model",
       stopReason: "end_turn",
-      tokensUsed: 157,
+      usage: { inputTokens: 100, outputTokens: 7, cacheReadTokens: 30, cacheWriteTokens: 20 },
+      // The whole prompt: uncached + cache reads + cache writes
+      contextTokens: 150,
       toolCalls: [],
     });
   });
@@ -101,10 +105,11 @@ describe("generateChatReply", () => {
         max_tokens: 1000,
         system: RAG_SYSTEM_PROMPT,
         output_config: { effort: "low" },
-        betas: ["server-side-fallback-2026-07-01"],
+        betas: ["server-side-fallback-2026-07-01", "compact-2026-09-04"],
         fallbacks: "default",
       }),
-      { signal },
+      // Retries are ours, so the user can be told about them
+      { signal, maxRetries: 0 },
     );
     // No toolbox, no tools
     expect(requestAt(0)).not.toHaveProperty("tools");
@@ -208,7 +213,9 @@ describe("generateChatReply with tools", () => {
       text: "ALBs work at layer 7.",
       model: "test-model",
       stopReason: "end_turn",
-      tokensUsed: 30, // 15 per round
+      // Both rounds' usage; the context is the first request's prompt
+      usage: { inputTokens: 20, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      contextTokens: 10,
       toolCalls: [done],
     });
   });
@@ -361,6 +368,171 @@ describe("generateChatReply with tools", () => {
       role: "assistant",
       content: [text("Partial "), thinking("fallback-model"), toolUse("made", { query: "real" })],
     });
+  });
+});
+
+describe("generateChatReply with a compacted conversation", () => {
+  const summary = {
+    type: "compaction" as const,
+    content: "The user asked about load balancers.",
+    signature: "sig",
+    encrypted_content: null,
+  };
+
+  it("sends the summary first, in place of the older messages, unchanged", async () => {
+    fakeStream([], { content: [text("ok")] });
+
+    await generateChatReply(
+      [
+        { role: "user", content: "Kept question" },
+        { role: "assistant", content: "Kept answer" },
+        { role: "user", content: "New question" },
+      ],
+      { onText: () => {}, compaction: summary },
+    );
+
+    expect(requestAt(0).messages).toEqual([
+      { role: "assistant", content: [summary] },
+      { role: "user", content: "Kept question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Kept answer", cache_control: { type: "ephemeral" } }],
+      },
+      { role: "user", content: "New question" },
+    ]);
+  });
+
+  it("caches the summary itself when nothing comes between it and the question", async () => {
+    fakeStream([], { content: [text("ok")] });
+
+    await generateChatReply([{ role: "user", content: "New question" }], { onText: () => {}, compaction: summary });
+
+    expect(requestAt(0).messages[0]).toEqual({
+      role: "assistant",
+      content: [{ ...summary, cache_control: { type: "ephemeral" } }],
+    });
+  });
+});
+
+describe("usageOf", () => {
+  it("uses the top-level usage when there's only one attempt", () => {
+    expect(
+      usageOf({
+        input_tokens: 5,
+        output_tokens: 6,
+        cache_read_input_tokens: 7,
+        cache_creation_input_tokens: null,
+      } as Anthropic.Beta.BetaUsage),
+    ).toEqual({ inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, cacheWriteTokens: 0 });
+  });
+
+  it("sums every attempt after a refusal fallback, not just the one that answered", () => {
+    const attempt = (input: number, output: number) => ({
+      input_tokens: input,
+      output_tokens: output,
+      cache_read_input_tokens: 1,
+      cache_creation_input_tokens: 2,
+    });
+    expect(
+      usageOf({
+        ...attempt(30, 40), // top level: only the fallback model's attempt
+        iterations: [
+          { type: "message", model: "test-model", ...attempt(10, 20) },
+          { type: "fallback_message", model: "fallback-model", ...attempt(30, 40) },
+        ],
+      } as Anthropic.Beta.BetaUsage),
+    ).toEqual({ inputTokens: 40, outputTokens: 60, cacheReadTokens: 2, cacheWriteTokens: 4 });
+  });
+});
+
+describe("generateChatReply when Claude is busy", () => {
+  /** An error the way the SDK raises it, asking for an immediate retry so tests don't wait */
+  const rateLimited = (headers: Record<string, string> = { "retry-after-ms": "0" }) =>
+    new Anthropic.RateLimitError(429, undefined, "rate limited", new Headers(headers));
+
+  function failingStream(error: unknown, events: StreamEvent[] = []) {
+    stream.mockReturnValueOnce({
+      async *[Symbol.asyncIterator]() {
+        yield* events;
+        throw error;
+      },
+      finalMessage: async () => {
+        throw error;
+      },
+    });
+  }
+
+  it("waits and retries, telling the caller why and for how long", async () => {
+    failingStream(rateLimited({ "retry-after-ms": "0" }));
+    failingStream(new Anthropic.InternalServerError(529, undefined, "overloaded", new Headers({ "retry-after": "0" })));
+    fakeStream([textDelta("Finally")], { content: [text("Finally")] });
+    const onRetry = vi.fn();
+
+    const reply = await generateChatReply(firstQuestion, { onText: () => {}, onRetry });
+
+    expect(reply.text).toBe("Finally");
+    expect(stream).toHaveBeenCalledTimes(3);
+    expect(onRetry.mock.calls.map(([notice]) => notice)).toEqual([
+      { reason: "rate_limited", delayMs: 0 },
+      { reason: "unavailable", delayMs: 0 },
+    ]);
+  });
+
+  it(`gives up after ${MAX_RETRIES} retries`, async () => {
+    for (let i = 0; i <= MAX_RETRIES; i++) failingStream(rateLimited());
+
+    await expect(generateChatReply(firstQuestion, { onText: () => {} })).rejects.toThrow(Anthropic.RateLimitError);
+    expect(stream).toHaveBeenCalledTimes(MAX_RETRIES + 1);
+  });
+
+  it("doesn't retry once text has reached the user", async () => {
+    failingStream(rateLimited(), [textDelta("Half an ans")]);
+
+    await expect(generateChatReply(firstQuestion, { onText: () => {} })).rejects.toThrow(Anthropic.RateLimitError);
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["a bad request", new Anthropic.BadRequestError(400, undefined, "bad", new Headers())],
+    ["a wait longer than we'll hold the user", rateLimited({ "retry-after": "120" })],
+    ["the API saying not to", rateLimited({ "retry-after-ms": "0", "x-should-retry": "false" })],
+  ])("doesn't retry %s", async (_case, error) => {
+    failingStream(error);
+    await expect(generateChatReply(firstQuestion, { onText: () => {} })).rejects.toBe(error);
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
+  it("stops waiting when the reply is abandoned", async () => {
+    const controller = new AbortController();
+    failingStream(rateLimited({ "retry-after": "10" }));
+    const onRetry = vi.fn(() => controller.abort());
+
+    await expect(
+      generateChatReply(firstQuestion, { onText: () => {}, onRetry, signal: controller.signal }),
+    ).rejects.toThrow(Anthropic.APIUserAbortError);
+    expect(stream).toHaveBeenCalledOnce();
+  });
+});
+
+describe("retryDelay", () => {
+  it("uses the wait the API asked for", () => {
+    expect(retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after-ms": "1500.2" })), 0)).toBe(1501);
+    expect(retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after": "3" })), 0)).toBe(3000);
+    const inFiveSeconds = new Date(Date.now() + 5000).toUTCString();
+    const fromDate = retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after": inFiveSeconds })), 0);
+    // HTTP dates have whole-second precision
+    expect(fromDate).toBeGreaterThan(3000);
+    expect(fromDate).toBeLessThanOrEqual(5000);
+  });
+
+  it("otherwise backs off exponentially, with jitter", () => {
+    const error = new Anthropic.APIConnectionError({ message: "reset" });
+    const random = vi.spyOn(Math, "random");
+    random.mockReturnValue(0.5); // no jitter
+    expect([0, 1, 2].map((attempt) => retryDelay(error, attempt))).toEqual([1000, 2000, 4000]);
+    random.mockReturnValue(0); // the least jitter allows
+    expect(retryDelay(error, 0)).toBe(750);
+    random.mockRestore();
   });
 });
 
