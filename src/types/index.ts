@@ -19,6 +19,22 @@ export interface DocumentSummary {
   createdAt: string;
 }
 
+/** A document as its own page shows it */
+export interface DocumentDetail extends DocumentSummary {
+  /** How many of the user's chats include this document */
+  chatCount: number;
+}
+
+/** One passage of a document, as the document page lists it */
+export interface DocumentPassage {
+  id: string;
+  content: string;
+  /** The page the passage starts on */
+  pageNumber: number | null;
+  /** 0-based position in the document */
+  chunkIndex: number;
+}
+
 export interface DocumentChunkResult {
   id: string;
   content: string;
@@ -39,6 +55,8 @@ export type SourceChunk = Omit<DocumentChunkResult, "similarity"> & { similarity
 export interface ChatSource {
   /** The N in "[Source N]" */
   position: number;
+  /** The passage's chunk, so it can be found on the document page */
+  chunkId: string;
   documentId: string;
   documentTitle: string;
   pageNumber: number | null;

@@ -131,3 +131,15 @@
     @apply font-sans;
   }
 }
+/* A source card flashes when a citation in the reply points to it (sky-500,
+   the citation markers' colour), fading back to its normal look */
+@keyframes source-flash {
+  from {
+    background-color: oklch(0.685 0.169 237.323 / 20%);
+    border-color: oklch(0.685 0.169 237.323);
+  }
+}
+
+.source-flash {
+  animation: source-flash 1.6s ease-out;
+}

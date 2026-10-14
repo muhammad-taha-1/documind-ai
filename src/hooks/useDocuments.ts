@@ -73,5 +73,11 @@ export function useDocuments(initialDocuments: DocumentSummary[]) {
     );
   }, []);
 
-  return { documents, addDocument, retry };
+  /** Drops a document that has been deleted */
+  const removeDocument = useCallback((documentId: string) => {
+    localVersion.current++;
+    setDocuments((current) => current.filter((document) => document.id !== documentId));
+  }, []);
+
+  return { documents, addDocument, retry, removeDocument };
 }

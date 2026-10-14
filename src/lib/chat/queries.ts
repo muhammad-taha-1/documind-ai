@@ -67,7 +67,13 @@ const chatMessageSelect = {
       position: true,
       similarity: true,
       chunk: {
-        select: { content: true, pageNumber: true, documentId: true, document: { select: { title: true } } },
+        select: {
+          id: true,
+          content: true,
+          pageNumber: true,
+          documentId: true,
+          document: { select: { title: true } },
+        },
       },
     },
   },
@@ -83,6 +89,7 @@ function toChatMessage(row: Prisma.MessageGetPayload<{ select: typeof chatMessag
     sources: row.sources.map(({ position, similarity, chunk }) => ({
       position,
       similarity,
+      chunkId: chunk.id,
       documentId: chunk.documentId,
       documentTitle: chunk.document.title,
       pageNumber: chunk.pageNumber,

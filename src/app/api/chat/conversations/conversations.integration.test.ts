@@ -301,6 +301,7 @@ describe("GET /api/chat/conversations/:id", () => {
       sources: [
         {
           position: 1,
+          chunkId: first.id,
           documentId,
           documentTitle: "Handbook",
           pageNumber: 1,
@@ -308,7 +309,7 @@ describe("GET /api/chat/conversations/:id", () => {
           similarity: 0.62,
         },
         // Numbers are kept, so "[Source 3]" still points at the right passage
-        { position: 3, content: "Passage 2", pageNumber: 3, similarity: 0.31 },
+        { position: 3, chunkId: third.id, content: "Passage 2", pageNumber: 3, similarity: 0.31 },
       ],
     });
   });

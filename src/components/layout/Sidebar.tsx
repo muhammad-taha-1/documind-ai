@@ -9,6 +9,7 @@ import { useDocumentsContext } from "@/components/documents/DocumentsProvider";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { UserMenu, type SidebarUser } from "./UserMenu";
+import { documentPath } from "@/lib/documents/paths";
 
 /**
  * Documents at the top, conversations below, the signed-in user at the
@@ -53,18 +54,25 @@ export function Sidebar({ user, onNavigate }: { user: SidebarUser; onNavigate?: 
             </p>
           ) : (
             <ul className="min-h-0 overflow-y-auto">
-              {documents.map((document) => (
-                <li
-                  key={document.id}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm"
-                  title={document.title}
-                >
-                  <FileText className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">{document.title}</span>
-                  {/* Ready is the normal state; only flag the others */}
-                  {document.status !== "READY" && <DocumentStatusBadge document={document} />}
-                </li>
-              ))}
+              {documents.map((document) => {
+                const href = documentPath(document.id);
+                return (
+                  <li key={document.id}>
+                    <Link
+                      href={href}
+                      onClick={onNavigate}
+                      title={document.title}
+                      aria-current={pathname === href ? "page" : undefined}
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground"
+                    >
+                      <FileText className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">{document.title}</span>
+                      {/* Ready is the normal state; only flag the others */}
+                      {document.status !== "READY" && <DocumentStatusBadge document={document} />}
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

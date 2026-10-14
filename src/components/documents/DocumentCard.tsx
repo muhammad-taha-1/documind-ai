@@ -1,10 +1,12 @@
 import { FileText } from "lucide-react";
+import Link from "next/link";
 import { LocalTime } from "@/components/common/LocalTime";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatBytes } from "@/lib/format";
 import type { DocumentSummary } from "@/types";
 import { DocumentStatusBadge } from "./DocumentStatusBadge";
 import { RetryButton } from "./RetryButton";
+import { documentPath } from "@/lib/documents/paths";
 
 export function DocumentCard({
   document,
@@ -20,7 +22,7 @@ export function DocumentCard({
   ].filter(Boolean);
 
   return (
-    <Card size="sm">
+    <Card size="sm" className="relative transition-colors has-[a:hover]:bg-muted/40">
       <CardContent className="flex items-start gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           <FileText className="size-4.5" />
@@ -28,7 +30,13 @@ export function DocumentCard({
         <div className="grid min-w-0 flex-1 gap-1">
           <div className="flex items-start justify-between gap-2">
             <h3 className="truncate font-medium" title={document.title}>
-              {document.title}
+              {/* Stretched over the whole card; the Retry button sits above it */}
+              <Link
+                href={documentPath(document.id)}
+                className="outline-none after:absolute after:inset-0 after:rounded-[inherit] focus-visible:after:ring-2 focus-visible:after:ring-ring"
+              >
+                {document.title}
+              </Link>
             </h3>
             <DocumentStatusBadge document={document} />
           </div>
@@ -37,7 +45,7 @@ export function DocumentCard({
             {details.map((detail) => ` · ${detail}`).join("")}
           </p>
           {document.status === "ERROR" && (
-            <div className="mt-1 grid gap-2">
+            <div className="relative mt-1 grid gap-2">
               {document.errorMessage && (
                 <p className="text-xs text-destructive">{document.errorMessage}</p>
               )}

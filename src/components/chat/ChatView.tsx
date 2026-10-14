@@ -1,6 +1,7 @@
 "use client";
 
 import { CircleAlert, FileText, Hourglass, Pencil, X } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { ConversationTitle } from "./ConversationTitle";
 import { useConversations } from "./ConversationsProvider";
 import { EditDocumentsDialog } from "./EditDocumentsDialog";
 import { ConversationTokenUsage } from "./TokenUsage";
+import { documentPath } from "@/lib/documents/paths";
 
 /** A conversation: title, messages, and the input with its documents above it. */
 export function ChatView({ conversation }: { conversation: ConversationDetail }) {
@@ -115,13 +117,15 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
         <div className="flex items-start gap-2">
           <ul aria-label="Documents in this chat" className="flex min-w-0 flex-1 flex-wrap gap-1.5">
             {documents.map((document) => (
-              <li
-                key={document.id}
-                className="flex max-w-60 items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-xs text-muted-foreground"
-                title={document.title}
-              >
-                <FileText className="size-3.5 shrink-0" />
-                <span className="truncate">{document.title}</span>
+              <li key={document.id} className="max-w-60">
+                <Link
+                  href={documentPath(document.id)}
+                  title={document.title}
+                  className="flex items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <FileText className="size-3.5 shrink-0" />
+                  <span className="truncate">{document.title}</span>
+                </Link>
               </li>
             ))}
             {documents.length === 0 && (

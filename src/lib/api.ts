@@ -41,3 +41,17 @@ export function parseApiError(responseText: string, fallback: string): string {
     return fallback;
   }
 }
+
+/**
+ * Content-Disposition header for a file shown in the browser. The plain
+ * `filename` is an ASCII fallback; `filename*` carries the real name (RFC 6266).
+ */
+export function inlineContentDisposition(fileName: string): string {
+  const fallback = fileName.replace(/[^\x20-\x7e]|["\\]/g, "_");
+  // encodeURIComponent leaves these alone, but RFC 8187 values must not contain them
+  const encoded = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `inline; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}

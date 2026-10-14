@@ -87,6 +87,13 @@ export async function runProcessing(documentId: string): Promise<void> {
       data: { status: DocumentStatus.READY },
     });
   } catch (error) {
+    // Deleting a document mid-run makes the next step fail (file gone, rows
+    // gone). That's the user's choice, not an error, and there's nothing to record.
+    const remaining = await prisma.document.count({ where: { id: documentId } }).catch(() => 1);
+    if (remaining === 0) {
+      console.info(`Document ${documentId} was deleted while being processed`);
+      return;
+    }
     // PdfParseErrors carry a user-facing message; anything else is unexpected
     // (DB down, file missing), so log it and show a generic message instead
     const isExpected = error instanceof PdfParseError;
@@ -102,7 +109,6 @@ export async function runProcessing(documentId: string): Promise<void> {
         },
       })
       .catch((updateError: unknown) => {
-        // e.g. the document was deleted mid-processing
         console.error(`Could not record failure for document ${documentId}`, updateError);
       });
   }

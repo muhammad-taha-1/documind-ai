@@ -48,3 +48,12 @@ export async function retryProcessing(documentId: string): Promise<void> {
     throw new Error(parseApiError(await response.text(), "Couldn't retry. Please try again."));
   }
 }
+
+/** Deletes a document, its passages and its file. Rejects with a displayable Error. */
+export async function deleteDocument(documentId: string): Promise<void> {
+  const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}`, { method: "DELETE" });
+  // 404 means it's already gone, which is what the caller wanted
+  if (!response.ok && response.status !== 404) {
+    throw new Error(parseApiError(await response.text(), "Couldn't delete the document. Please try again."));
+  }
+}
