@@ -197,3 +197,7 @@ _Screenshots are coming soon._
 - Scanned (image-only) PDFs aren't OCR'd; they're reported as having no extractable text.
 - NextAuth v4 has open advisories affecting email sign-in and Auth.js's `getToken`, neither of which this app uses. The fix is a migration to Auth.js v5.
 - Designed for a single server instance (see Design decisions).
+
+## License
+
+[MIT](LICENSE)
