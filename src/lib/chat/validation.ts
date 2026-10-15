@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_IMAGES_PER_MESSAGE, TOO_MANY_IMAGES_MESSAGE } from "./attachments";
 
 // Request rules for the chat API. Free of server imports so client
 // components can share the limits.
@@ -54,13 +55,20 @@ export function firstIssueMessage(error: z.ZodError): string {
 /** Longest message a user can send, in characters */
 export const MAX_MESSAGE_LENGTH = 10_000;
 
-export const sendMessageSchema = z.object({
-  conversationId: z.string().min(1).max(100),
-  message: z
-    .string()
-    .trim()
-    .min(1, "Message can't be empty.")
-    .max(MAX_MESSAGE_LENGTH, `Messages can be up to ${MAX_MESSAGE_LENGTH.toLocaleString("en-US")} characters.`),
-});
+export const sendMessageSchema = z
+  .object({
+    conversationId: z.string().min(1).max(100),
+    message: z
+      .string()
+      .trim()
+      .max(MAX_MESSAGE_LENGTH, `Messages can be up to ${MAX_MESSAGE_LENGTH.toLocaleString("en-US")} characters.`),
+    // Only multipart requests carry images; their content is checked separately
+    images: z.array(z.instanceof(File)).max(MAX_IMAGES_PER_MESSAGE, TOO_MANY_IMAGES_MESSAGE).default([]),
+  })
+  // Images can be sent on their own ("what's in this screenshot?" is implied)
+  .refine(({ message, images }) => message.length > 0 || images.length > 0, {
+    message: "Message can't be empty.",
+    path: ["message"],
+  });
 
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;

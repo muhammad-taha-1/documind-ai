@@ -1,14 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Session } from "next-auth";
+import sharp from "sharp";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatReply } from "@/lib/ai/chat";
+import type { ChatReply, TurnImage } from "@/lib/ai/chat";
 import { COMPACT_AT_TOKENS } from "@/lib/ai/context";
 import { buildRAGPrompt } from "@/lib/ai/prompts";
 import { FULL_TEXT_MAX_CHARACTERS } from "@/lib/ai/rag";
 import { prisma } from "@/lib/db/prisma";
 import { toVectorLiteral } from "@/lib/db/vectors";
 import { readNdjson } from "@/lib/chat/stream";
+import { readStoredFile, resolveStorageKey } from "@/lib/storage";
 import { makeVector } from "@/test/embeddings";
 import type { ChatStreamEvent, ToolCall } from "@/types";
 
@@ -60,6 +65,7 @@ const withoutDocuments = (question: string) =>
 
 let ownerId: string;
 let otherUserId: string;
+let uploadRoot: string;
 
 function signInAs(userId: string | null) {
   getSession.mockResolvedValue(
@@ -176,6 +182,8 @@ async function createMessages(conversationId: string, count: number) {
 }
 
 beforeAll(async () => {
+  uploadRoot = await mkdtemp(path.join(tmpdir(), "documind-chat-"));
+  process.env.UPLOAD_DIR = uploadRoot;
   const runId = randomUUID();
   ownerId = (await prisma.user.create({ data: { email: `owner-${runId}@test.local` } })).id;
   otherUserId = (await prisma.user.create({ data: { email: `other-${runId}@test.local` } })).id;
@@ -197,6 +205,7 @@ beforeEach(async () => {
 afterAll(async () => {
   await prisma.user.deleteMany({ where: { id: { in: [ownerId, otherUserId] } } });
   await prisma.$disconnect();
+  await rm(uploadRoot, { recursive: true, force: true });
 });
 
 describe("POST /api/chat", () => {
@@ -757,5 +766,235 @@ describe("POST /api/chat tools", () => {
     expect(JSON.stringify(events)).not.toContain("PRIVATE-PASSAGE");
     expect(JSON.stringify(events)).not.toContain("Private notes");
     expect(generateEmbedding).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/chat with images", () => {
+  /** A real PNG: a solid block of colour */
+  async function png(width: number, height: number, name = "chart.png") {
+    const bytes = await sharp({ create: { width, height, channels: 3, background: { r: 200, g: 60, b: 60 } } })
+      .png()
+      .toBuffer();
+    return new File([new Uint8Array(bytes)], name, { type: "image/png" });
+  }
+
+  /** A multipart POST with the Content-Length a browser would send */
+  async function imageRequest(fields: { conversationId: string; message?: string; images: File[] }) {
+    const form = new FormData();
+    form.set("conversationId", fields.conversationId);
+    form.set("message", fields.message ?? "");
+    for (const image of fields.images) form.append("images", image);
+    // Encoding the form once gives its exact bytes and the boundary to declare
+    const encoded = new Request("http://localhost/api/chat", { method: "POST", body: form });
+    const body = new Uint8Array(await encoded.arrayBuffer());
+    return new Request("http://localhost/api/chat", {
+      method: "POST",
+      body,
+      headers: {
+        "content-type": encoded.headers.get("content-type")!,
+        "content-length": String(body.byteLength),
+      },
+    });
+  }
+
+  /** Files stored under the user's images folder */
+  const storedImages = (userId: string) =>
+    readdir(resolveStorageKey(`${userId}/images`)).catch(() => [] as string[]);
+
+  const findAttachments = (conversationId: string) =>
+    prisma.messageAttachment.findMany({ where: { message: { conversationId } }, orderBy: { position: "asc" } });
+
+  const sentImages = (call = 0) => generateChatReply.mock.calls[call][0].at(-1)!.images ?? [];
+
+  beforeEach(async () => {
+    await rm(resolveStorageKey(`${ownerId}/images`), { recursive: true, force: true });
+  });
+
+  it("sends the images to Claude ahead of the question, then saves them with the message", async () => {
+    const id = await createConversation(ownerId);
+    generateChatReply.mockImplementation(replyWith(["Two red squares."]));
+
+    const response = await POST(
+      await imageRequest({
+        conversationId: id,
+        message: "What do these show?",
+        images: [await png(64, 48), await png(30, 30, "second.png")],
+      }),
+    );
+    const events = await readEvents(response);
+
+    expect(response.status).toBe(200);
+    expect(generateChatReply.mock.calls[0][0]).toEqual([
+      {
+        role: "user",
+        content: withoutDocuments("What do these show?"),
+        images: [
+          { kind: "image", name: "chart.png", mediaType: "image/png", data: expect.any(String) },
+          { kind: "image", name: "second.png", mediaType: "image/png", data: expect.any(String) },
+        ],
+      },
+    ]);
+    // What Claude got is the re-encoded image, at its size
+    const [first] = sentImages() as Extract<TurnImage, { kind: "image" }>[];
+    const decoded = await sharp(Buffer.from(first.data, "base64")).metadata();
+    expect([decoded.format, decoded.width, decoded.height]).toEqual(["png", 64, 48]);
+
+    const attachments = await findAttachments(id);
+    expect(attachments.map((a) => [a.position, a.fileName, a.mediaType, a.width, a.height])).toEqual([
+      [1, "chart.png", "image/png", 64, 48],
+      [2, "second.png", "image/png", 30, 30],
+    ]);
+    for (const attachment of attachments) {
+      expect(attachment.storageKey).toBe(`${ownerId}/images/${attachment.id}.png`);
+      expect((await readStoredFile(attachment.storageKey)).byteLength).toBe(attachment.byteSize);
+    }
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      userMessage: {
+        content: "What do these show?",
+        attachments: [
+          {
+            id: attachments[0].id,
+            name: "chart.png",
+            width: 64,
+            height: 48,
+            url: `/api/attachments/${attachments[0].id}`,
+          },
+          { id: attachments[1].id, name: "second.png" },
+        ],
+      },
+    });
+    // The title model sees them too
+    expect(generateTitle).toHaveBeenCalledWith("What do these show?", {
+      images: sentImages(),
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("takes images without a message, and doesn't search the documents with nothing to search for", async () => {
+    const document = await createSearchableDocument();
+    const id = await createConversation(ownerId, [document.id]);
+    generateChatReply.mockImplementation(replyWith(["A red square."]));
+
+    const events = await readEvents(
+      await POST(await imageRequest({ conversationId: id, images: [await png(20, 20)] })),
+    );
+
+    expect(generateEmbedding).not.toHaveBeenCalled();
+    const prompt = generateChatReply.mock.calls[0][0].at(-1)!.content;
+    expect(prompt).toContain("The documents weren't searched");
+    expect(prompt).toContain("<question>\nPlease analyze this image.\n</question>");
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      userMessage: { content: "", attachments: [{ name: "chart.png" }] },
+      assistantMessage: { retrieval: "NOT_SEARCHED", sources: [] },
+      // No generated title (the mock returns null): the image's name stands in
+      conversation: { title: "chart.png" },
+    });
+  });
+
+  it("sends earlier images again with later messages, read back from storage", async () => {
+    const id = await createConversation(ownerId);
+    generateChatReply.mockImplementation(replyWith(["A red square."]));
+    await readEvents(
+      await POST(await imageRequest({ conversationId: id, message: "What is it?", images: [await png(20, 20)] })),
+    );
+    const [attachment] = await findAttachments(id);
+
+    generateChatReply.mockImplementation(replyWith(["Red."]));
+    await readEvents(await POST(chatRequest({ conversationId: id, message: "What colour was it?" })));
+
+    expect(generateChatReply.mock.calls[1][0]).toEqual([
+      {
+        role: "user",
+        content: "What is it?",
+        images: [
+          {
+            kind: "image",
+            name: "chart.png",
+            mediaType: "image/png",
+            data: (await readStoredFile(attachment.storageKey)).toString("base64"),
+          },
+        ],
+      },
+      { role: "assistant", content: "A red square." },
+      { role: "user", content: withoutDocuments("What colour was it?") },
+    ]);
+  });
+
+  it("saves nothing, not even the images, when the reply fails", async () => {
+    const id = await createConversation(ownerId);
+    generateChatReply.mockImplementation(replyWith([""], { stopReason: "refusal" }));
+
+    const events = await readEvents(
+      await POST(await imageRequest({ conversationId: id, message: "?", images: [await png(20, 20)] })),
+    );
+
+    expect(events.at(-1)).toMatchObject({ type: "error" });
+    expect(await findMessages(id)).toEqual([]);
+    expect(await storedImages(ownerId)).toEqual([]);
+  });
+
+  const tiff = async () =>
+    new File([new Uint8Array(await sharp(await (await png(10, 10)).arrayBuffer()).tiff().toBuffer())], "scan.png", {
+      type: "image/png",
+    });
+
+  it.each([
+    [
+      "isn't really an image",
+      () => new File(["%PDF-1.7"], "notes.png", { type: "image/png" }),
+      400,
+      "notes.png couldn't be read as an image. It may be damaged.",
+    ],
+    ["is in a format Claude can't read", tiff, 415, "Only PNG, JPEG, GIF and WebP images can be attached."],
+    ["is empty", () => new File([], "empty.png", { type: "image/png" }), 400, "empty.png is empty."],
+    [
+      "is over 5 MB",
+      () => new File([new Uint8Array(5 * 1024 * 1024 + 1)], "big.png", { type: "image/png" }),
+      413,
+      "big.png is too large. Images can be up to 5 MB.",
+    ],
+  ] as const)("rejects an image that %s, without calling Claude", async (_case, makeFile, status, error) => {
+    const id = await createConversation(ownerId);
+
+    const response = await POST(await imageRequest({ conversationId: id, message: "?", images: [await makeFile()] }));
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error });
+    expect(generateChatReply).not.toHaveBeenCalled();
+    expect(await storedImages(ownerId)).toEqual([]);
+  });
+
+  it("rejects more than four images, and a message with neither text nor images", async () => {
+    const id = await createConversation(ownerId);
+    const five = await Promise.all(Array.from({ length: 5 }, () => png(10, 10)));
+
+    const tooMany = await POST(await imageRequest({ conversationId: id, message: "?", images: five }));
+    expect(tooMany.status).toBe(400);
+    expect(await tooMany.json()).toEqual({ error: "images: You can attach up to 4 images to a message." });
+
+    const empty = await POST(await imageRequest({ conversationId: id, message: "  ", images: [] }));
+    expect(empty.status).toBe(400);
+    expect(await empty.json()).toEqual({ error: "message: Message can't be empty." });
+    expect(generateChatReply).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized upload from its declared size, before reading it", async () => {
+    const id = await createConversation(ownerId);
+    const request = await imageRequest({ conversationId: id, images: [await png(10, 10)] });
+    const headers = new Headers(request.headers);
+    headers.set("content-length", String(30 * 1024 * 1024));
+
+    const response = await POST(new Request(request, { headers }));
+
+    expect(response.status).toBe(413);
+  });
+
+  it("checks the conversation is the user's before looking at the images", async () => {
+    const id = await createConversation(otherUserId);
+    const response = await POST(await imageRequest({ conversationId: id, message: "?", images: [await png(10, 10)] }));
+    expect(response.status).toBe(404);
+    expect(await storedImages(ownerId)).toEqual([]);
   });
 });

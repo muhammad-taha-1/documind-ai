@@ -1,7 +1,7 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import type { DocumentDetail, DocumentPassage, DocumentSummary, SourceChunk } from "@/types";
-import { deleteFile } from "./storage";
+import { deleteFile } from "@/lib/storage";
 
 // Explicit select so internal columns (filePath, userId) never reach a response
 export const documentSummarySelect = {

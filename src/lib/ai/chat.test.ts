@@ -140,6 +140,42 @@ describe("generateChatReply", () => {
     expect(requestAt(0)).not.toHaveProperty("cache_control");
   });
 
+  it("sends images before the text, labelled, and caches history that has them", async () => {
+    fakeStream([], { content: [text("ok")] });
+    const chart = { kind: "image" as const, name: "chart.png", mediaType: "image/png" as const, data: "AAAA" };
+
+    await generateChatReply(
+      [
+        { role: "user", content: "", images: [chart, { kind: "omitted", name: "old.jpg" }] },
+        { role: "assistant", content: "A bar chart." },
+        { role: "user", content: "Compare it", images: [{ ...chart, name: "new.png" }] },
+      ],
+      { onText: () => {} },
+    );
+
+    const image = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+    expect(requestAt(0).messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Image 1: chart.png" },
+          image("AAAA"),
+          { type: "text", text: "Image 2: old.jpg (no longer included, to keep the conversation within size limits)" },
+          // Sent without text: the API needs some, so it gets a stand-in question
+          { type: "text", text: "Please analyze these images." },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "A bar chart.", cache_control: { type: "ephemeral" } }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "Image 1: new.png" }, image("AAAA"), { type: "text", text: "Compare it" }],
+      },
+    ]);
+  });
+
   it("sets no cache breakpoint on the first message of a chat", async () => {
     fakeStream([], { content: [text("ok")] });
 

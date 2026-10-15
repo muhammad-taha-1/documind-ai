@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { chunkPages } from "./chunker";
 import { embedDocumentChunks } from "./embedding";
 import { PdfParseError, parsePdf } from "./parser";
-import { resolveStorageKey } from "./storage";
+import { resolveStorageKey } from "@/lib/storage";
 
 export const NO_TEXT_MESSAGE =
   "No extractable text — this PDF may be image-only (for example, a scan).";

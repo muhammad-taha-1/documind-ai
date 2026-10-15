@@ -51,6 +51,22 @@ describe("retrieveContext", () => {
     expect(db.searchSimilarChunks).toHaveBeenCalledWith(queryVector, ["doc"], "user-1", TOP_K);
   });
 
+  it("doesn't search without a question (images sent on their own)", async () => {
+    largeDocuments();
+
+    expect(await retrieveContext(null, ["doc"], "user-1")).toEqual({ mode: "NOT_SEARCHED", sources: [] });
+    expect(generateEmbedding).not.toHaveBeenCalled();
+    expect(db.searchSimilarChunks).not.toHaveBeenCalled();
+  });
+
+  it("still sends small documents in full without a question", async () => {
+    db.measureSearchableText.mockResolvedValue({ chunks: 1, characters: 100 });
+    const passage = { ...result("a", 0), similarity: null };
+    db.listSearchableChunks.mockResolvedValue([passage]);
+
+    expect(await retrieveContext(null, ["doc"], "user-1")).toEqual({ mode: "FULL_TEXT", sources: [passage] });
+  });
+
   it("drops passages below the similarity floor", async () => {
     largeDocuments();
     db.searchSimilarChunks.mockResolvedValue([result("a", 0.5), result("b", 0.2), result("c", 0.19)]);

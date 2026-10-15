@@ -34,9 +34,13 @@ export const MAX_HISTORY_CHARACTERS = 600_000;
 /**
  * The newest turns that fit in `maxCharacters`, starting with a user turn.
  * Normally that's all of them; dropping the oldest is the fallback when
- * compaction hasn't kept the conversation small.
+ * compaction hasn't kept the conversation small. Images have their own
+ * budget (vision.ts), so only text counts here.
  */
-export function fitHistory(turns: ChatTurn[], maxCharacters = MAX_HISTORY_CHARACTERS): ChatTurn[] {
+export function fitHistory<Turn extends Pick<ChatTurn, "role" | "content">>(
+  turns: Turn[],
+  maxCharacters = MAX_HISTORY_CHARACTERS,
+): Turn[] {
   let start = turns.length;
   let characters = 0;
   while (start > 0 && characters + turns[start - 1].content.length <= maxCharacters) {

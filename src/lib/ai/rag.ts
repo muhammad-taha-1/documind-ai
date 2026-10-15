@@ -48,9 +48,13 @@ export interface RetrievedContext {
 /**
  * Finds the passages from the user's documents that Claude needs to answer
  * `question`. Only the user's own documents are read, whatever IDs are passed.
+ *
+ * A null question (images sent without a message) has nothing to search
+ * with. Small documents are still sent whole; larger ones aren't searched,
+ * and Claude can search them itself once it has seen the images.
  */
 export async function retrieveContext(
-  question: string,
+  question: string | null,
   documentIds: readonly string[],
   userId: string,
   { signal }: { signal?: AbortSignal } = {},
@@ -63,6 +67,9 @@ export async function retrieveContext(
   if (characters <= FULL_TEXT_MAX_CHARACTERS) {
     // Everything fits, so there's nothing to search (or embed)
     return { mode: "FULL_TEXT", sources: await listSearchableChunks(documentIds, userId) };
+  }
+  if (question === null) {
+    return { mode: "NOT_SEARCHED", sources: [] };
   }
 
   const sources = await searchPassages(question, documentIds, userId, { signal });

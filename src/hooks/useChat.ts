@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { parseApiError } from "@/lib/api";
+import { isImageMediaType } from "@/lib/chat/attachments";
 import { readNdjson } from "@/lib/chat/stream";
-import type { ChatMessage, ChatStreamEvent, ConversationSummary, RetryReason, ToolCall } from "@/types";
+import type { ChatAttachment, ChatMessage, ChatStreamEvent, ConversationSummary, RetryReason, ToolCall } from "@/types";
+import type { DraftImage } from "./useDraftImages";
 
 /** A message on its way: shown straight away, with the reply filling in as it streams. */
 export interface PendingExchange {
@@ -24,6 +26,31 @@ function upsertToolCall(calls: ToolCall[], call: ToolCall): ToolCall[] {
   return calls.some((existing) => existing.id === call.id)
     ? calls.map((existing) => (existing.id === call.id ? call : existing))
     : [...calls, call];
+}
+
+/** The request body: JSON for text alone, multipart/form-data when there are images */
+function requestBody(conversationId: string, content: string, images: readonly DraftImage[]): RequestInit {
+  if (images.length === 0) {
+    return {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conversationId, message: content }),
+    };
+  }
+  const form = new FormData();
+  form.set("conversationId", conversationId);
+  form.set("message", content);
+  for (const image of images) {
+    form.append("images", image.file, image.name);
+  }
+  // No content-type header: the browser adds it, with the multipart boundary
+  return { body: form };
+}
+
+/** The images of a message on its way, shown from their local previews */
+function previewAttachments(images: readonly DraftImage[]): ChatAttachment[] {
+  return images.flatMap(({ id, file, name, previewUrl }) =>
+    isImageMediaType(file.type) ? [{ id, name, mediaType: file.type, width: null, height: null, url: previewUrl }] : [],
+  );
 }
 
 const NETWORK_ERROR = "Couldn't reach the server. Check your connection and try again.";
@@ -55,9 +82,9 @@ export function useChat({
   // Leaving the chat abandons the reply; the server stops generating it
   useEffect(() => () => inFlight.current?.abort(), []);
 
-  /** Resolves true once the exchange is saved, false if it failed. */
+  /** Resolves true once the exchange is saved, false if it failed. `content` may be empty if there are images. */
   const sendMessage = useCallback(
-    async (content: string): Promise<boolean> => {
+    async (content: string, images: readonly DraftImage[] = []): Promise<boolean> => {
       if (inFlight.current) {
         return false; // One exchange at a time
       }
@@ -69,6 +96,7 @@ export function useChat({
           id: `pending-${crypto.randomUUID()}`,
           role: "user",
           content,
+          attachments: previewAttachments(images),
           createdAt: new Date().toISOString(),
           retrieval: null,
           sources: [],
@@ -83,8 +111,7 @@ export function useChat({
       try {
         const response = await fetch("/api/chat", {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ conversationId, message: content }),
+          ...requestBody(conversationId, content, images),
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {

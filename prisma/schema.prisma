@@ -136,11 +136,11 @@ model Conversation {
 }
 
 model Message {
-  id               String          @id @default(cuid())
+  id               String              @id @default(cuid())
   role             MessageRole
-  content          String          @db.Text
+  content          String              @db.Text
   conversationId   String
-  conversation     Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation     Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   model            String?
   // Token usage of a reply, summed over every request behind it (tool rounds,
   // refusal fallbacks). Null for user messages and replies from before Phase 12.
@@ -162,11 +162,36 @@ model Message {
   /// Tools Claude used for this reply, each with its result: ToolCall[] in src/types.
   /// One list rather than separate call/result columns, so they can't get out of step.
   toolCalls        Json?
-  /// Vision attachments (Phase 14), e.g. [{ type: "image", path, mediaType }]
-  attachments      Json?
-  createdAt        DateTime        @default(now())
+  /// Images the user attached to this message
+  attachments      MessageAttachment[]
+  createdAt        DateTime            @default(now())
 
   @@index([conversationId])
+}
+
+/// An image attached to a user message. A table rather than a JSON column on
+/// Message: the image route looks attachments up by ID with an ownership
+/// check, and deleting a conversation has to find every file to remove.
+model MessageAttachment {
+  /// Also names the stored file, so it's generated before the row is written
+  id         String   @id
+  messageId  String
+  message    Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  /// 1-based order within the message: Claude sees it as "Image N"
+  position   Int
+  /// The name it was uploaded with, for display only (never used in paths)
+  fileName   String
+  /// image/png, image/jpeg, image/gif or image/webp: the stored file's actual format
+  mediaType  String
+  /// Path of the file relative to the upload directory (see storage.ts)
+  storageKey String
+  /// Size of the stored file, which was resized to what Claude can see
+  width      Int
+  height     Int
+  byteSize   Int
+  createdAt  DateTime @default(now())
+
+  @@unique([messageId, position])
 }
 
 enum MessageRole {
@@ -186,6 +211,8 @@ enum RetrievalMode {
   NO_MATCH
   /// The chat's documents have no searchable text (deleted, or being reprocessed)
   NO_DOCUMENTS
+  /// The message had no text to search with (images sent on their own)
+  NOT_SEARCHED
 }
 
 /// One passage given to Claude for a reply. A table rather than an ID array on

@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getChatHistory, getConversation } from "@/lib/chat/queries";
 import { prisma } from "@/lib/db/prisma";
+import { imageStorageKey, saveFile } from "@/lib/storage";
 
 // The API is scripted; the conversation lives in the real database
 const { create } = vi.hoisted(() => ({ create: vi.fn() }));
@@ -99,6 +103,49 @@ describe("compactConversation", () => {
       summary: "Summary of 0-5",
       through: messages[5].createdAt.toISOString(),
     });
+  });
+
+  it("shows the summarizer the images in what it summarizes, so it can describe them", async () => {
+    const uploadRoot = await mkdtemp(path.join(tmpdir(), "documind-compaction-"));
+    process.env.UPLOAD_DIR = uploadRoot;
+    try {
+      const { id, messages } = await createConversation(10);
+      const storageKey = imageStorageKey(userId, randomUUID(), "png");
+      await saveFile(storageKey, Buffer.from("chart bytes"));
+      await prisma.messageAttachment.create({
+        data: {
+          id: randomUUID(),
+          messageId: messages[2].id,
+          position: 1,
+          fileName: "chart.png",
+          mediaType: "image/png",
+          storageKey,
+          width: 10,
+          height: 10,
+          byteSize: 11,
+        },
+      });
+      create.mockResolvedValueOnce(summaryResponse("Summary with the chart"));
+
+      expect(await compactConversation(id)).toBe("compacted");
+
+      const [request] = create.mock.calls[0];
+      expect(request.messages[2]).toEqual({
+        role: "user",
+        content: [
+          { type: "text", text: "Image 1: chart.png" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: Buffer.from("chart bytes").toString("base64") },
+          },
+          { type: "text", text: "message 2" },
+        ],
+      });
+      expect(COMPACTION_INSTRUCTIONS).toContain("What each image the user attached showed");
+    } finally {
+      delete process.env.UPLOAD_DIR;
+      await rm(uploadRoot, { recursive: true, force: true });
+    }
   });
 
   it("compacts again by summarizing the old summary with what came after it", async () => {

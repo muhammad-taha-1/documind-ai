@@ -1,6 +1,7 @@
 // Enums come from Prisma's generated enums file, which is safe to import in
 // client components (it has no database code), so they can't drift from the schema.
 import type { DocumentStatus, MessageRole, RetrievalMode } from "@/generated/prisma/enums";
+import type { ImageMediaType } from "@/lib/chat/attachments";
 
 export { DocumentStatus, MessageRole, RetrievalMode } from "@/generated/prisma/enums";
 
@@ -98,10 +99,26 @@ export interface ToolCall {
   output: string | null;
 }
 
+/** An image attached to a user message */
+export interface ChatAttachment {
+  id: string;
+  /** The name it was uploaded with */
+  name: string;
+  mediaType: ImageMediaType;
+  /** Pixel size, so the page can reserve space before it loads; null while a message is still being sent */
+  width: number | null;
+  height: number | null;
+  /** Where to load it from: the attachment route, or a local preview while sending */
+  url: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
+  /** Empty for images sent without a message */
   content: string;
+  /** Images the user attached, in order. Empty for assistant messages. */
+  attachments: ChatAttachment[];
   /** ISO 8601 */
   createdAt: string;
   /** How the documents were searched for this reply; null for user messages and pre-RAG replies */

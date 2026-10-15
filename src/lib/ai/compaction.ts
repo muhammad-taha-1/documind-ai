@@ -1,10 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getCompactionState, saveCompaction } from "@/lib/chat/queries";
 import { anthropic, CHAT_EFFORT, CHAT_MODEL } from "./anthropic";
-import { COMPACTION_BETA, usageOf } from "./chat";
+import { COMPACTION_BETA, toMessageParam, usageOf } from "./chat";
 import { findCompactionCut } from "./context";
 import { RAG_SYSTEM_PROMPT } from "./prompts";
 import { TOOLS } from "./tools";
+import { historyImageBudget, withHistoryImages } from "./vision";
 
 // Compaction: replacing a conversation's older messages with a summary (see
 // context.ts for why). The API writes the summary: a request with the
@@ -29,6 +30,7 @@ Keep:
 - What the user is trying to achieve, and any preferences they stated (format, level of detail, language).
 - Each question asked and the substance of the answer, with the specific facts, figures and names from the documents. Cite them by document title and page number, not by "[Source N]" labels, which won't mean anything later.
 - Conclusions reached, and anything left unresolved or promised for later.
+- What each image the user attached showed (by file name), with the details that were discussed, such as values read from a chart or transcribed text. The images won't be visible after this summary.
 
 Leave out greetings and repetition. Write in the conversation's language, as concise prose or short bullet points. Do not call tools; reply with the summary only.`;
 
@@ -61,6 +63,8 @@ export async function compactConversation(conversationId: string): Promise<Compa
       return "nothing_to_compact";
     }
     const older = state.messages.slice(0, cut);
+    // The summarizer sees the images too, so it can describe them
+    const olderTurns = await withHistoryImages(older, historyImageBudget([]));
 
     const response = await anthropic.beta.messages.create({
       model: CHAT_MODEL,
@@ -74,7 +78,7 @@ export async function compactConversation(conversationId: string): Promise<Compa
       // the old summary (if any) and the messages after it, up to the cut
       messages: [
         ...(state.compaction ? [{ role: "assistant" as const, content: [state.compaction] }] : []),
-        ...older.map(({ role, content }) => ({ role, content })),
+        ...olderTurns.map(toMessageParam),
       ],
       compaction: { type: "summarize", instructions: COMPACTION_INSTRUCTIONS },
     });

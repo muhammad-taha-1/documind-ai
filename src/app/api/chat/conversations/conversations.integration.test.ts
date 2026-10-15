@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/prisma";
+import { imageStorageKey, resolveStorageKey, saveFile } from "@/lib/storage";
 import type { ConversationDetail, ConversationSummary } from "@/types";
 
 const getSession = vi.hoisted(() => vi.fn<() => Promise<Session | null>>());
@@ -12,6 +16,7 @@ const item = await import("./[id]/route");
 
 let ownerId: string;
 let otherUserId: string;
+let uploadRoot: string;
 
 function signInAs(userId: string | null) {
   getSession.mockResolvedValue(
@@ -68,7 +73,42 @@ async function createConversationRow(userId: string, documentIds: string[], upda
   return id;
 }
 
+/** A user message with an image attached, its file stored. Returns the attachment's ID and storage key. */
+async function createMessageWithImage(conversationId: string, userId: string) {
+  const attachmentId = randomUUID();
+  const storageKey = imageStorageKey(userId, attachmentId, "png");
+  await saveFile(storageKey, Buffer.from("png bytes"));
+  await prisma.message.create({
+    data: {
+      conversationId,
+      role: "user",
+      content: "",
+      attachments: {
+        create: {
+          id: attachmentId,
+          position: 1,
+          fileName: "chart.png",
+          mediaType: "image/png",
+          storageKey,
+          width: 640,
+          height: 480,
+          byteSize: 9,
+        },
+      },
+    },
+  });
+  return { attachmentId, storageKey };
+}
+
+const fileExists = (key: string) =>
+  access(resolveStorageKey(key)).then(
+    () => true,
+    () => false,
+  );
+
 beforeAll(async () => {
+  uploadRoot = await mkdtemp(path.join(tmpdir(), "documind-conversations-"));
+  process.env.UPLOAD_DIR = uploadRoot;
   const runId = randomUUID();
   ownerId = (await prisma.user.create({ data: { email: `owner-${runId}@test.local` } })).id;
   otherUserId = (await prisma.user.create({ data: { email: `other-${runId}@test.local` } })).id;
@@ -84,6 +124,7 @@ beforeEach(async () => {
 afterAll(async () => {
   await prisma.user.deleteMany({ where: { id: { in: [ownerId, otherUserId] } } });
   await prisma.$disconnect();
+  await rm(uploadRoot, { recursive: true, force: true });
 });
 
 describe("POST /api/chat/conversations", () => {
@@ -222,6 +263,7 @@ describe("GET /api/chat/conversations/:id", () => {
         id: expect.any(String),
         role: "user",
         content: "Hi",
+        attachments: [],
         createdAt: "2026-01-01T10:00:00.000Z",
         retrieval: null,
         sources: [],
@@ -232,6 +274,7 @@ describe("GET /api/chat/conversations/:id", () => {
         id: expect.any(String),
         role: "assistant",
         content: "Hello!",
+        attachments: [],
         createdAt: "2026-01-01T10:01:00.000Z",
         retrieval: null,
         sources: [],
@@ -240,6 +283,29 @@ describe("GET /api/chat/conversations/:id", () => {
       },
     ]);
     expect(conversation.compaction).toBeNull();
+  });
+
+  it("returns each message's images, with where to load them from", async () => {
+    const id = await createConversationRow(ownerId, []);
+    const { attachmentId } = await createMessageWithImage(id, ownerId);
+
+    const { conversation } = (await (await getOne(id)).json()) as { conversation: ConversationDetail };
+
+    expect(conversation.messages[0]).toMatchObject({
+      content: "",
+      attachments: [
+        {
+          id: attachmentId,
+          name: "chart.png",
+          mediaType: "image/png",
+          width: 640,
+          height: 480,
+          url: `/api/attachments/${attachmentId}`,
+        },
+      ],
+    });
+    // Where the file is stored stays on the server
+    expect(JSON.stringify(conversation)).not.toContain("images/");
   });
 
   it("returns the tools each reply used, skipping a record that isn't valid", async () => {
@@ -423,10 +489,22 @@ describe("DELETE /api/chat/conversations/:id", () => {
     expect(await prisma.message.count({ where: { conversationId: id } })).toBe(0);
   });
 
+  it("deletes the images attached to its messages, files included", async () => {
+    const id = await createConversationRow(ownerId, []);
+    const { attachmentId, storageKey } = await createMessageWithImage(id, ownerId);
+
+    expect((await deleteOne(id)).status).toBe(204);
+
+    expect(await prisma.messageAttachment.count({ where: { id: attachmentId } })).toBe(0);
+    expect(await fileExists(storageKey)).toBe(false);
+  });
+
   it("can't delete another user's conversation", async () => {
     const id = await createConversationRow(otherUserId, []);
+    const { storageKey } = await createMessageWithImage(id, otherUserId);
     expect((await deleteOne(id)).status).toBe(404);
     expect(await prisma.conversation.count({ where: { id } })).toBe(1);
+    expect(await fileExists(storageKey)).toBe(true);
   });
 
   it("requires sign-in", async () => {

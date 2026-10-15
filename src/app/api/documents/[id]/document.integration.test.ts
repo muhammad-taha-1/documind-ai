@@ -6,7 +6,7 @@ import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/prisma";
 import { claimDocumentForProcessing, runProcessing } from "@/lib/documents/processing";
-import { documentStorageKey, resolveStorageKey, saveFile } from "@/lib/documents/storage";
+import { documentStorageKey, resolveStorageKey, saveFile } from "@/lib/storage";
 import { makePdf } from "@/test/pdf";
 
 const getSession = vi.hoisted(() => vi.fn<() => Promise<Session | null>>());

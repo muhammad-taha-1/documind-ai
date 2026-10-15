@@ -5,7 +5,7 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db/prisma";
 import { claimDocumentForProcessing, runProcessing } from "@/lib/documents/processing";
 import { documentSummarySelect, listDocuments, toDocumentSummary } from "@/lib/documents/queries";
-import { deleteFile, documentStorageKey, saveFile } from "@/lib/documents/storage";
+import { deleteFile, documentStorageKey, saveFile } from "@/lib/storage";
 import {
   hasPdfSignature,
   MAX_FILE_SIZE,

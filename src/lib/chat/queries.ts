@@ -1,10 +1,15 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { Prisma } from "@/generated/prisma/client";
-import type { ChatTurn, CompactionBlock } from "@/lib/ai/chat";
+import type { CompactionBlock } from "@/lib/ai/chat";
 import { fitHistory, parseCompactionBlock } from "@/lib/ai/context";
+import type { HistoryTurn } from "@/lib/ai/vision";
+import { attachmentPath, isImageMediaType } from "@/lib/chat/attachments";
+import type { NewAttachment } from "@/lib/chat/images";
 import { prisma } from "@/lib/db/prisma";
+import { deleteFilesQuietly } from "@/lib/storage";
 import type {
+  ChatAttachment,
   ChatMessage,
   ConversationDetail,
   ConversationDocument,
@@ -61,6 +66,10 @@ const chatMessageSelect = {
   outputTokens: true,
   cacheReadTokens: true,
   cacheWriteTokens: true,
+  attachments: {
+    orderBy: { position: "asc" },
+    select: { id: true, fileName: true, mediaType: true, width: true, height: true },
+  },
   sources: {
     orderBy: { position: "asc" },
     select: {
@@ -96,6 +105,10 @@ function toChatMessage(row: Prisma.MessageGetPayload<{ select: typeof chatMessag
       content: chunk.content,
     })),
     toolCalls: parseToolCalls(row.id, row.toolCalls),
+    attachments: row.attachments.flatMap(({ id, fileName, mediaType, width, height }): ChatAttachment[] =>
+      // Stored types are checked on upload; anything else can't be shown safely
+      isImageMediaType(mediaType) ? [{ id, name: fileName, mediaType, width, height, url: attachmentPath(id) }] : [],
+    ),
     // All four are written together, so one null means no usage was recorded
     usage:
       row.inputTokens === null ||
@@ -209,11 +222,38 @@ export async function createConversation(
   return { status: "created", conversation: toConversationSummary(row) };
 }
 
-/** Deletes a conversation and its messages. False if the user has no such conversation. */
+/**
+ * Deletes a conversation, its messages and their images. False if the user
+ * has no such conversation.
+ */
 export async function deleteConversation(userId: string, conversationId: string): Promise<boolean> {
-  // deleteMany so the userId filter applies; messages go with it (onDelete: Cascade)
-  const { count } = await prisma.conversation.deleteMany({ where: { id: conversationId, userId } });
-  return count === 1;
+  const storageKeys = await prisma.$transaction(async (tx) => {
+    // Read just before the delete. (A reply saved at that very moment could
+    // still leave a stray file, which wastes space but breaks nothing.)
+    const attachments = await tx.messageAttachment.findMany({
+      where: { message: { conversation: { id: conversationId, userId } } },
+      select: { storageKey: true },
+    });
+    // deleteMany so the userId filter applies; messages and attachment rows
+    // go with it (onDelete: Cascade)
+    const { count } = await tx.conversation.deleteMany({ where: { id: conversationId, userId } });
+    return count === 1 ? attachments.map((attachment) => attachment.storageKey) : null;
+  });
+  if (storageKeys === null) {
+    return false;
+  }
+  // Only once the rows are gone: a failed delete leaves a stray file, never a
+  // message pointing at a missing one
+  await deleteFilesQuietly(storageKeys);
+  return true;
+}
+
+/** An attached image's stored file, or null if the user has no such attachment. */
+export async function getAttachmentFile(userId: string, attachmentId: string) {
+  return prisma.messageAttachment.findFirst({
+    where: { id: attachmentId, message: { conversation: { userId } } },
+    select: { storageKey: true, mediaType: true, fileName: true },
+  });
 }
 
 export type UpdateConversationResult =
@@ -260,11 +300,25 @@ export async function updateConversation(
   };
 }
 
+const historyImageSelect = {
+  orderBy: { position: "asc" },
+  select: { id: true, fileName: true, mediaType: true, storageKey: true, byteSize: true },
+} as const satisfies Prisma.Message$attachmentsArgs;
+
+function toHistoryTurn(message: {
+  role: string;
+  content: string;
+  attachments: HistoryTurn["images"];
+}): HistoryTurn {
+  // The queries only select user and assistant messages
+  return { role: message.role as HistoryTurn["role"], content: message.content, images: message.attachments };
+}
+
 export interface ChatHistory {
   /** The summary of the older messages, if the conversation has been compacted */
   compaction: CompactionBlock | null;
-  /** The messages after the summary, oldest first, starting with a user message */
-  turns: ChatTurn[];
+  /** The messages after the summary, oldest first, starting with a user message. Images are still on disk (vision.ts). */
+  turns: HistoryTurn[];
   /** True if nothing has been said in this conversation yet */
   isEmpty: boolean;
   /** The chat's documents, for retrieval and tools (deleted ones left out) */
@@ -294,11 +348,10 @@ export async function getChatHistory(userId: string, conversationId: string): Pr
       ...(compaction && conversation.compactedThrough && { createdAt: { gt: conversation.compactedThrough } }),
     },
     orderBy: { createdAt: "asc" },
-    select: { role: true, content: true },
+    select: { role: true, content: true, attachments: historyImageSelect },
   });
 
-  // The query only selects user and assistant messages
-  const turns = messages.map((message) => ({ role: message.role as ChatTurn["role"], content: message.content }));
+  const turns = messages.map(toHistoryTurn);
   const fitted = fitHistory(turns);
   if (fitted.length < turns.length) {
     console.warn(
@@ -332,14 +385,14 @@ export async function getCompactionState(conversationId: string) {
       ...(compaction && conversation.compactedThrough && { createdAt: { gt: conversation.compactedThrough } }),
     },
     orderBy: { createdAt: "asc" },
-    select: { role: true, content: true, createdAt: true },
+    select: { role: true, content: true, createdAt: true, attachments: historyImageSelect },
   });
   return {
     compaction,
     // As stored, even if the block is unusable: saveCompaction's compare-and-set
     // checks it to make sure nobody else compacted in the meantime
     compactedThrough: conversation.compactedThrough,
-    messages: messages.map((message) => ({ ...message, role: message.role as ChatTurn["role"] })),
+    messages: messages.map((message) => ({ ...toHistoryTurn(message), createdAt: message.createdAt })),
   };
 }
 
@@ -367,7 +420,12 @@ export async function saveCompaction(
 
 export interface ExchangeToSave {
   conversationId: string;
-  user: { content: string; createdAt: Date };
+  user: {
+    content: string;
+    createdAt: Date;
+    /** Images whose files are already stored (images.ts storeImages) */
+    attachments: readonly NewAttachment[];
+  };
   assistant: {
     content: string;
     model: string;
@@ -410,7 +468,13 @@ export async function saveExchange(exchange: ExchangeToSave) {
 
     // One query at a time: a transaction runs on a single connection
     const userMessage = await tx.message.create({
-      data: { conversationId, role: "user", content: user.content, createdAt: user.createdAt },
+      data: {
+        conversationId,
+        role: "user",
+        content: user.content,
+        createdAt: user.createdAt,
+        attachments: { create: user.attachments.map((attachment) => ({ ...attachment })) },
+      },
       select: chatMessageSelect,
     });
     const assistantMessage = await tx.message.create({

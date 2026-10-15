@@ -7,6 +7,7 @@ import { LocalTime } from "@/components/common/LocalTime";
 import { remarkCitations } from "@/lib/chat/citations";
 import type { ChatMessage } from "@/types";
 import { Citation, CitationsContext } from "./Citation";
+import { MessageImages } from "./MessageImages";
 import { MessageSources, sourceCardId } from "./MessageSources";
 import { MessageTokenUsage } from "./TokenUsage";
 import { ToolCallDisplay } from "./ToolCallDisplay";
@@ -27,11 +28,12 @@ const remarkPlugins = [remarkGfm, remarkCitations];
 
 type DisplayedMessage = Pick<
   ChatMessage,
-  "role" | "content" | "createdAt" | "retrieval" | "sources" | "toolCalls" | "usage"
+  "role" | "content" | "attachments" | "createdAt" | "retrieval" | "sources" | "toolCalls" | "usage"
 >;
 
 /**
- * User messages: right-aligned on a subtle background, shown as typed.
+ * User messages: right-aligned, their images first, then the text on a
+ * subtle background, shown as typed.
  * Assistant messages: left-aligned, no background: the tools Claude used,
  * then the reply as markdown, then the document passages it was based on.
  */
@@ -41,9 +43,15 @@ export function MessageBubble({ message }: { message: DisplayedMessage }) {
   return (
     <div className={`group/message flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
       {isUser ? (
-        <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap break-words">
-          {message.content}
-        </div>
+        <>
+          {message.attachments.length > 0 && <MessageImages attachments={message.attachments} />}
+          {/* Images can be sent without text */}
+          {message.content && (
+            <div className="max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm whitespace-pre-wrap break-words">
+              {message.content}
+            </div>
+          )}
+        </>
       ) : (
         <AssistantReply message={message} />
       )}

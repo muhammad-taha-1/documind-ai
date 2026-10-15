@@ -41,6 +41,23 @@ describe("generateTitle", () => {
     expect(options).toMatchObject({ signal });
   });
 
+  it("shows the model the images of the first message, and stands in for missing text", async () => {
+    respond("Quarterly revenue chart");
+
+    await generateTitle("  ", { images: [{ kind: "image", name: "chart.png", mediaType: "image/png", data: "AAAA" }] });
+
+    expect(create.mock.calls[0][0].messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Image 1: chart.png" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+          { type: "text", text: "<message>\n(no text, just the images above)\n</message>" },
+        ],
+      },
+    ]);
+  });
+
   it("returns null when the model doesn't finish normally", async () => {
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     respond("", "refusal");

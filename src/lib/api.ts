@@ -9,21 +9,30 @@ export function jsonError(status: number, message: string): Response {
 
 const DEFAULT_MAX_JSON_BYTES = 16 * 1024;
 
+export type ReadBodyResult = { ok: true; body: unknown } | { ok: false; response: Response };
+
 /**
- * Reads a small JSON request body. Route handlers have no body size limit
- * and request.json() buffers everything, so the declared size is checked
- * before reading. On failure, returns the error response to send instead.
+ * The error response for a request body that's too big or of unknown size,
+ * or null if it's fine to read. Route handlers have no body size limit, and
+ * request.json() and request.formData() buffer everything, so the declared
+ * size is checked first. Requiring it rules out unbounded chunked bodies.
  */
-export async function readJsonBody(
-  request: Request,
-  maxBytes = DEFAULT_MAX_JSON_BYTES,
-): Promise<{ ok: true; body: unknown } | { ok: false; response: Response }> {
+export function checkContentLength(request: Request, maxBytes: number): Response | null {
   const contentLength = Number(request.headers.get("content-length"));
   if (!Number.isInteger(contentLength) || contentLength <= 0) {
-    return { ok: false, response: jsonError(411, "Content-Length header is required.") };
+    return jsonError(411, "Content-Length header is required.");
   }
   if (contentLength > maxBytes) {
-    return { ok: false, response: jsonError(413, "Request body is too large.") };
+    return jsonError(413, "Request body is too large.");
+  }
+  return null;
+}
+
+/** Reads a small JSON request body. On failure, returns the error response to send instead. */
+export async function readJsonBody(request: Request, maxBytes = DEFAULT_MAX_JSON_BYTES): Promise<ReadBodyResult> {
+  const lengthError = checkContentLength(request, maxBytes);
+  if (lengthError) {
+    return { ok: false, response: lengthError };
   }
   try {
     return { ok: true, body: await request.json() };

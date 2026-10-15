@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { type PendingExchange, useChat } from "@/hooks/useChat";
+import { useDraftImages } from "@/hooks/useDraftImages";
 import { updateConversation } from "@/lib/chat/client";
 import type { ChatMessage, ConversationDetail, TokenUsage } from "@/types";
 import { ChatInput } from "./ChatInput";
@@ -25,6 +26,7 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
     onConversationChange: upsertConversation,
   });
   const [draft, setDraft] = useState("");
+  const draftImages = useDraftImages();
   const [documents, setDocuments] = useState(conversation.documents);
   const [editingDocuments, setEditingDocuments] = useState(false);
 
@@ -32,10 +34,15 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
   const title = conversations.find((c) => c.id === conversation.id)?.title ?? conversation.title;
 
   async function handleSend(content: string) {
-    const sent = await sendMessage(content);
-    if (!sent) {
-      // Nothing was saved — give the text back, unless they've started typing again
+    const images = draftImages.take();
+    const sent = await sendMessage(content, images);
+    if (sent) {
+      // The saved message shows the stored copies; the local previews can go
+      draftImages.release(images);
+    } else {
+      // Nothing was saved — give the text and images back, unless they've started typing again
       setDraft((current) => (current.trim() ? current : content));
+      draftImages.restore(images);
     }
   }
 
@@ -61,6 +68,7 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
                 id: "streaming-reply",
                 role: "assistant" as const,
                 content: pending.reply,
+                attachments: [],
                 createdAt: pending.userMessage.createdAt,
                 // Sources and usage arrive with the saved reply
                 retrieval: null,
@@ -92,7 +100,9 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
         emptyState={
           <div className="grid gap-1">
             <p className="font-medium">Ask anything about your documents</p>
-            <p className="text-sm text-muted-foreground">Answers come from the documents below.</p>
+            <p className="text-sm text-muted-foreground">
+              Answers come from the documents below. You can also attach screenshots, charts or photos.
+            </p>
           </div>
         }
       />
@@ -147,6 +157,10 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
         <ChatInput
           value={draft}
           onValueChange={setDraft}
+          images={draftImages.images}
+          onAddImages={draftImages.add}
+          onRemoveImage={draftImages.remove}
+          imageError={draftImages.error}
           onSend={handleSend}
           disabled={pending !== null}
         />

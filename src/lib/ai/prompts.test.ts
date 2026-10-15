@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatDocument } from "@/lib/chat/queries";
 import type { SourceChunk } from "@/types";
-import { buildRAGPrompt } from "./prompts";
+import { buildRAGPrompt, imageOnlyQuestion } from "./prompts";
 
 function chunk(overrides: Partial<SourceChunk>): SourceChunk {
   return {
@@ -90,10 +90,18 @@ describe("buildRAGPrompt", () => {
   it.each([
     ["NO_MATCH", "No passage in the user's documents closely matches this question."],
     ["NO_DOCUMENTS", "The documents in this chat have no searchable text right now"],
+    ["NOT_SEARCHED", "The documents weren't searched: the message has no text to search with."],
   ] as const)("explains an empty context (%s)", (mode, note) => {
     const prompt = buildRAGPrompt("Hi", { mode, sources: [] }, [awsGuide]);
     expect(prompt).toContain(`<context>\n${note}`);
     expect(prompt).toContain("<question>\nHi\n</question>");
     expect(prompt).not.toContain("[Source");
+  });
+});
+
+describe("imageOnlyQuestion", () => {
+  it("asks about the image, or images", () => {
+    expect(imageOnlyQuestion(1)).toBe("Please analyze this image.");
+    expect(imageOnlyQuestion(3)).toBe("Please analyze these images.");
   });
 });

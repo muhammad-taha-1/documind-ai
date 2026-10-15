@@ -9,7 +9,7 @@ import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
 import { chunkPages } from "./chunker";
 import { claimDocumentForProcessing, NO_TEXT_MESSAGE, runProcessing } from "./processing";
-import { documentStorageKey, saveFile } from "./storage";
+import { documentStorageKey, saveFile } from "@/lib/storage";
 
 const generateEmbeddings = vi.hoisted(() => vi.fn<(texts: string[]) => Promise<number[][]>>());
 vi.mock("@/lib/ai/embeddings", async (importOriginal) => ({

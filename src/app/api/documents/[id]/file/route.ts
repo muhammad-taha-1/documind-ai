@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { inlineContentDisposition, jsonError } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { getDocumentFile } from "@/lib/documents/queries";
-import { resolveStorageKey } from "@/lib/documents/storage";
+import { resolveStorageKey } from "@/lib/storage";
 
 /**
  * GET /api/documents/:id/file — the uploaded PDF, shown in the browser's viewer.

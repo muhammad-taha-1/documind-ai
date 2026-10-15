@@ -1,7 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { ImageMediaType } from "@/lib/chat/attachments";
 import type { MessageRole, RetryReason, TokenUsage, ToolCall } from "@/types";
 import { anthropic, CHAT_EFFORT, CHAT_MAX_TOKENS, CHAT_MODEL } from "./anthropic";
-import { RAG_SYSTEM_PROMPT } from "./prompts";
+import { imageOnlyQuestion, RAG_SYSTEM_PROMPT } from "./prompts";
 
 /** Server-side refusal fallback: see the `fallbacks` comment in generateChatReply */
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
@@ -36,9 +37,55 @@ type BetaMessageParam = Anthropic.Beta.BetaMessageParam;
 /** The API's summary of older messages, sent back exactly as it was returned (context.ts) */
 export type CompactionBlock = Anthropic.Beta.BetaCompactionBlockParam;
 
+/**
+ * An image in a user turn: its data, or a placeholder when it's left out to
+ * keep the request within the API's limits (vision.ts).
+ */
+export type TurnImage =
+  | { kind: "image"; name: string; mediaType: ImageMediaType; data: string }
+  | { kind: "omitted"; name: string };
+
 export interface ChatTurn {
   role: Extract<MessageRole, "user" | "assistant">;
+  /** Empty for images sent without a message */
   content: string;
+  /** Images attached to a user turn, in the order they were attached */
+  images?: readonly TurnImage[];
+}
+
+/** Content blocks both the Messages API and its beta accept */
+type ImageTurnBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } };
+
+/**
+ * A turn's images as content blocks, each introduced by a label ("Image 2:
+ * chart.png") so Claude and the user can refer to them by name, in this turn
+ * and later ones.
+ */
+export function imageBlocks(images: readonly TurnImage[]): ImageTurnBlock[] {
+  return images.flatMap((image, i): ImageTurnBlock[] => {
+    const label = `Image ${i + 1}: ${image.name}`;
+    return image.kind === "image"
+      ? [
+          { type: "text", text: label },
+          { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
+        ]
+      : [{ type: "text", text: `${label} (no longer included, to keep the conversation within size limits)` }];
+  });
+}
+
+/**
+ * A turn as an API message. Images go before the text, which is how Claude
+ * reads them best. A turn of images alone gets a stand-in question, since
+ * the API doesn't accept empty text.
+ */
+export function toMessageParam({ role, content, images = [] }: ChatTurn): BetaMessageParam {
+  if (images.length === 0) {
+    return { role, content };
+  }
+  const text = content.trim() ? content : imageOnlyQuestion(images.length);
+  return { role, content: [...imageBlocks(images), { type: "text", text }] };
 }
 
 export interface ToolOutput {
@@ -238,7 +285,7 @@ function toCachedMessages(turns: ChatTurn[], compaction: CompactionBlock | undef
   const messages: BetaMessageParam[] = [
     // The block must come first; it takes the place of the messages it summarizes
     ...(compaction ? [{ role: "assistant" as const, content: [compaction] }] : []),
-    ...turns,
+    ...turns.map(toMessageParam),
   ];
   const lastHistoryMessage = messages.length - 2;
   return messages.map((message, i) => (i === lastHistoryMessage ? withCacheBreakpoint(message) : message));

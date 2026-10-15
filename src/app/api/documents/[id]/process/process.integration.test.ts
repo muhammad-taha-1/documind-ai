@@ -6,7 +6,7 @@ import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
-import { documentStorageKey, saveFile } from "@/lib/documents/storage";
+import { documentStorageKey, saveFile } from "@/lib/storage";
 import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
 
