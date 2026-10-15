@@ -177,7 +177,7 @@ npm run db:up             # integration tests need the database
 npm run test:integration  # route handlers and queries against real PostgreSQL
 ```
 
-Integration tests use the real database and real file storage (in a temporary folder) and replace only the AI APIs. They run with placeholder API keys, so a call that isn't replaced fails instead of spending credits. CI runs lint, the format check, typecheck, both test suites and a production build on every push and pull request.
+Integration tests use the real database and real file storage (in a temporary folder) and replace only the AI APIs. They run with placeholder API keys, so a call that isn't replaced fails instead of spending credits. The CI workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs lint, the format check, typecheck, both test suites and a production build. It's currently started by hand from the Actions tab.
 
 ## Screenshots
 

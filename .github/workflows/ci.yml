@@ -1,9 +1,13 @@
 name: CI
 
+# Started by hand from the Actions tab for now: Actions isn't enabled for this
+# repository's account yet. To run on every push and pull request, replace
+# this with:
+#   push:
+#     branches: [main]
+#   pull_request:
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 # A newer push to the same branch makes an older run pointless
 concurrency:
