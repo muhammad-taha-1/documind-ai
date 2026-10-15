@@ -2,7 +2,6 @@
 
 import { MessagesSquare, ScrollText } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { ChatMessage, ConversationCompaction } from "@/types";
 import { MessageBubble } from "./MessageBubble";
 
@@ -84,18 +83,28 @@ export function ChatWindow({
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
         {messages.map((message, i) => (
           <Fragment key={message.id}>
-            <MessageBubble message={message} />
+            <MessageBubble
+              message={message}
+              // The reply still arriving is the last message while streaming
+              streaming={isStreaming && i === messages.length - 1 && message.role === "assistant"}
+            />
             {i === lastSummarized && compaction && <CompactionMarker summary={compaction.summary} />}
           </Fragment>
         ))}
-        {isLoading && (
-          <div className="grid gap-2" role="status" aria-label="Assistant is thinking">
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-4 w-1/2" />
-            <Skeleton className="h-4 w-2/3" />
-          </div>
-        )}
+        {isLoading && <TypingIndicator />}
       </div>
+    </div>
+  );
+}
+
+/** Three animated dots while Claude hasn't started writing (it may be thinking or searching) */
+function TypingIndicator() {
+  return (
+    <div role="status" className="flex h-6 items-center gap-1 text-muted-foreground">
+      <span className="sr-only">Claude is thinking…</span>
+      <span aria-hidden className="typing-dot size-1.5 rounded-full bg-current" />
+      <span aria-hidden className="typing-dot size-1.5 rounded-full bg-current" />
+      <span aria-hidden className="typing-dot size-1.5 rounded-full bg-current" />
     </div>
   );
 }

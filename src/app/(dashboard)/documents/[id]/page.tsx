@@ -4,12 +4,11 @@ import { DocumentHeader } from "@/components/documents/DocumentHeader";
 import { DocumentPassages } from "@/components/documents/DocumentPassages";
 import { getSession } from "@/lib/auth";
 import { getDocumentDetail, listDocumentPassages } from "@/lib/documents/queries";
+import { MAX_PASSAGE_QUERY_LENGTH } from "@/lib/documents/validation";
 
 export const metadata: Metadata = {
   title: "Document · DocuMind AI",
 };
-
-const MAX_QUERY_LENGTH = 200;
 
 /** One value of a search param: the first if it's repeated */
 function param(value: string | string[] | undefined): string | undefined {
@@ -35,7 +34,7 @@ export default async function DocumentPage({ params, searchParams }: PageProps<"
     notFound();
   }
 
-  const query = (param(search.q) ?? "").trim().slice(0, MAX_QUERY_LENGTH);
+  const query = (param(search.q) ?? "").trim().slice(0, MAX_PASSAGE_QUERY_LENGTH);
   const page = Number(param(search.page));
   const chunkId = param(search.chunk);
   const result = await listDocumentPassages(session.user.id, id, {

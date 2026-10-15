@@ -1,4 +1,4 @@
-import { jsonError } from "@/lib/api";
+import { jsonError, withErrorHandling } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { deleteDocument } from "@/lib/documents/queries";
 
@@ -7,7 +7,7 @@ import { deleteDocument } from "@/lib/documents/queries";
  * Chats that included it stay, without it; their replies lose the sources
  * that came from it.
  */
-export async function DELETE(_request: Request, context: RouteContext<"/api/documents/[id]">) {
+export const DELETE = withErrorHandling(async (_request: Request, context: RouteContext<"/api/documents/[id]">) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
@@ -19,4 +19,4 @@ export async function DELETE(_request: Request, context: RouteContext<"/api/docu
     return jsonError(404, "Document not found.");
   }
   return new Response(null, { status: 204 });
-}
+});

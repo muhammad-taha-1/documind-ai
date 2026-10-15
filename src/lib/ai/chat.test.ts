@@ -500,15 +500,20 @@ describe("generateChatReply when Claude is busy", () => {
   it("waits and retries, telling the caller why and for how long", async () => {
     failingStream(rateLimited({ "retry-after-ms": "0" }));
     failingStream(new Anthropic.InternalServerError(529, undefined, "overloaded", new Headers({ "retry-after": "0" })));
+    failingStream(
+      new Anthropic.InternalServerError(503, undefined, "unavailable", new Headers({ "retry-after": "0" })),
+    );
     fakeStream([textDelta("Finally")], { content: [text("Finally")] });
     const onRetry = vi.fn();
 
     const reply = await generateChatReply(firstQuestion, { onText: () => {}, onRetry });
 
     expect(reply.text).toBe("Finally");
-    expect(stream).toHaveBeenCalledTimes(3);
+    expect(stream).toHaveBeenCalledTimes(4);
     expect(onRetry.mock.calls.map(([notice]) => notice)).toEqual([
       { reason: "rate_limited", delayMs: 0 },
+      // 529 means Claude as a whole is busy, which the user is told as such
+      { reason: "overloaded", delayMs: 0 },
       { reason: "unavailable", delayMs: 0 },
     ]);
   });
@@ -583,7 +588,14 @@ describe("describeChatError", () => {
 
   it.each([
     [new Anthropic.RateLimitError(429, undefined, "rate limited", headers), /a lot of requests/, false],
-    [new Anthropic.InternalServerError(529, undefined, "overloaded", headers), /temporarily unavailable/, true],
+    [new Anthropic.InternalServerError(529, undefined, "overloaded", headers), /at capacity/, false],
+    [new Anthropic.InternalServerError(500, undefined, "internal", headers), /temporarily unavailable/, true],
+    [
+      new Anthropic.BadRequestError(400, undefined, "prompt is too long: 1050000 tokens > 1000000 maximum", headers),
+      /grown too long.*new chat/,
+      true,
+    ],
+    [new Anthropic.APIError(413, undefined, "request_too_large", headers), /grown too long/, true],
     [new Anthropic.AuthenticationError(401, undefined, "bad key", headers), /isn't configured/, true],
     [new Anthropic.PermissionDeniedError(403, undefined, "nope", headers), /isn't configured/, true],
     [new Anthropic.APIConnectionTimeoutError(), /Couldn't reach Claude/, true],

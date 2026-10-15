@@ -29,6 +29,9 @@ const BASE_RETRY_DELAY_MS = 1_000;
 /** If the API asks us to wait longer than this, give up and let the user retry */
 const MAX_RETRY_DELAY_MS = 30_000;
 
+/** The API's "overloaded" status: Claude as a whole is busy, not just this account */
+const OVERLOADED_STATUS = 529;
+
 /** Sent to Claude when a tool throws, instead of the error itself */
 const TOOL_CRASHED = "The tool failed unexpectedly. Try another approach, or answer without it.";
 
@@ -178,7 +181,10 @@ function retryReason(error: unknown): RetryReason | null {
     return "unavailable";
   }
   const { status } = error;
-  // 408 timeout, 409 conflict, 5xx including 529 "overloaded" — the same set the SDK retries
+  if (status === OVERLOADED_STATUS) {
+    return "overloaded";
+  }
+  // 408 timeout, 409 conflict, other 5xx — the same set the SDK retries
   return status === 408 || status === 409 || (status !== undefined && status >= 500) ? "unavailable" : null;
 }
 
@@ -466,6 +472,20 @@ export async function generateChatReply(
 }
 
 /**
+ * The request was too big for the API: too many tokens (400, which has no
+ * error type of its own, so its message is the only signal), or too many
+ * bytes (413, e.g. a lot of images).
+ */
+function isTooLong(error: unknown): boolean {
+  if (!(error instanceof Anthropic.APIError)) {
+    return false;
+  }
+  return (
+    error.status === 413 || (error instanceof Anthropic.BadRequestError && /prompt is too long/i.test(error.message))
+  );
+}
+
+/**
  * Turns a failure from generateChatReply into a message for the user, and
  * says whether it's worth logging (problems on our side, not transient load).
  */
@@ -473,6 +493,16 @@ export function describeChatError(error: unknown): { message: string; log: boole
   // Most specific first: these are all APIError subclasses
   if (error instanceof Anthropic.RateLimitError) {
     return { message: "Claude is handling a lot of requests right now. Please try again in a moment.", log: false };
+  }
+  if (isTooLong(error)) {
+    // Compaction should keep conversations well short of this, so it's worth knowing about
+    return {
+      message: "This conversation has grown too long for Claude to read. Start a new chat to continue.",
+      log: true,
+    };
+  }
+  if (error instanceof Anthropic.APIError && error.status === OVERLOADED_STATUS) {
+    return { message: "Claude is at capacity right now. Please try again shortly.", log: false };
   }
   if (error instanceof Anthropic.InternalServerError) {
     // 5xx, including 529 "overloaded"

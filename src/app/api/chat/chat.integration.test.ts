@@ -11,6 +11,7 @@ import { COMPACT_AT_TOKENS } from "@/lib/ai/context";
 import { buildRAGPrompt } from "@/lib/ai/prompts";
 import { FULL_TEXT_MAX_CHARACTERS } from "@/lib/ai/rag";
 import { prisma } from "@/lib/db/prisma";
+import { RATE_LIMITS, resetRateLimits } from "@/lib/rate-limit";
 import { toVectorLiteral } from "@/lib/db/vectors";
 import { readNdjson } from "@/lib/chat/stream";
 import { readStoredFile, resolveStorageKey } from "@/lib/storage";
@@ -183,6 +184,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  resetRateLimits();
   await prisma.conversation.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
   await prisma.document.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
   generateChatReply.mockReset();
@@ -455,6 +457,26 @@ describe("POST /api/chat", () => {
     const response = await POST(chatRequest({ conversationId: "x", message: "Hi" }));
     expect(response.status).toBe(401);
     expect(generateChatReply).not.toHaveBeenCalled();
+  });
+
+  it(`limits each user to ${RATE_LIMITS.chat.limit} messages a minute`, async () => {
+    const id = await createConversation(ownerId);
+    // Rejected messages still count, which keeps this cheap
+    for (let i = 0; i < RATE_LIMITS.chat.limit; i++) {
+      expect((await POST(chatRequest({ conversationId: id, message: "" }))).status).toBe(400);
+    }
+
+    const limited = await POST(chatRequest({ conversationId: id, message: "Hi" }));
+
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toMatch(/^\d+$/);
+    expect((await limited.json()).error).toMatch(/^You're sending messages too quickly\./);
+    expect(generateChatReply).not.toHaveBeenCalled();
+    // Someone else isn't held up
+    signInAs(otherUserId);
+    const other = await createConversation(otherUserId);
+    generateChatReply.mockImplementation(replyWith(["ok"]));
+    expect((await POST(chatRequest({ conversationId: other, message: "Hi" }))).status).toBe(200);
   });
 });
 

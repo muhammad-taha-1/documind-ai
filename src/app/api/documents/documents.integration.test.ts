@@ -5,6 +5,7 @@ import path from "node:path";
 import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/prisma";
+import { RATE_LIMITS, resetRateLimits } from "@/lib/rate-limit";
 import { MAX_FILE_SIZE } from "@/lib/documents/validation";
 import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
@@ -60,8 +61,12 @@ async function uploadRequest(
   });
 }
 
+/** Every file under the upload directory; none if nothing has created it yet */
 async function storedFiles(): Promise<string[]> {
-  const entries = await readdir(uploadRoot, { recursive: true, withFileTypes: true });
+  const entries = await readdir(uploadRoot, { recursive: true, withFileTypes: true }).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  });
   return entries.filter((e) => e.isFile()).map((e) => e.name);
 }
 
@@ -78,6 +83,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  resetRateLimits();
   await prisma.document.deleteMany({ where: { userId: { in: [ownerId, otherUserId] } } });
   await rm(uploadRoot, { recursive: true, force: true });
   scheduled.length = 0;
@@ -151,7 +157,7 @@ describe("POST /api/documents", () => {
     expect(scheduled).toHaveLength(0);
     expect(await response.json()).toEqual({ error: "Only PDF files are supported." });
     expect(await prisma.document.count({ where: { userId: ownerId } })).toBe(0);
-    await expect(storedFiles()).rejects.toThrow(); // upload root never created
+    expect(await storedFiles()).toEqual([]);
   });
 
   it("rejects a missing or empty file", async () => {
@@ -193,12 +199,26 @@ describe("POST /api/documents", () => {
     expect(scheduled).toHaveLength(0);
     vi.mocked(console.error).mockRestore();
   });
+
+  it(`limits uploads to ${RATE_LIMITS.upload.limit} a minute per user`, async () => {
+    // Empty uploads are rejected (400) but still count, which keeps this cheap
+    for (let i = 0; i < RATE_LIMITS.upload.limit; i++) {
+      expect((await POST(await uploadRequest(null))).status).toBe(400);
+    }
+
+    const limited = await POST(await uploadRequest(new Blob([PDF_BYTES])));
+
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toMatch(/^\d+$/);
+    expect((await limited.json()).error).toMatch(/^You're uploading too quickly\. Please wait \d+ seconds?\.$/);
+    expect(await storedFiles()).toEqual([]);
+  });
 });
 
 describe("GET /api/documents", () => {
   it("rejects signed-out requests", async () => {
     signInAs(null);
-    expect((await GET()).status).toBe(401);
+    expect((await GET(new Request("http://localhost/api/documents"))).status).toBe(401);
   });
 
   it("returns only the signed-in user's documents, newest first", async () => {
@@ -211,7 +231,7 @@ describe("GET /api/documents", () => {
     });
     await prisma.document.create({ data: { ...docFields, title: "Not mine", userId: otherUserId } });
 
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/api/documents"));
     expect(response.status).toBe(200);
     const { documents } = (await response.json()) as { documents: DocumentSummary[] };
 

@@ -165,8 +165,11 @@ export interface ConversationDetail extends ConversationSummary {
   compaction: ConversationCompaction | null;
 }
 
-/** Why a request to Claude is being retried: too many requests (429), or the service is struggling (5xx, timeouts) */
-export type RetryReason = "rate_limited" | "unavailable";
+/**
+ * Why a request to Claude is being retried: too many requests from this app
+ * (429), Claude at capacity (529), or the service struggling (other 5xx, timeouts)
+ */
+export type RetryReason = "rate_limited" | "overloaded" | "unavailable";
 
 /**
  * One line of the POST /api/chat response stream (newline-delimited JSON).

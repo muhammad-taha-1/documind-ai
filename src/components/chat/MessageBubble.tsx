@@ -5,6 +5,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LocalTime } from "@/components/common/LocalTime";
 import { remarkCitations } from "@/lib/chat/citations";
+import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/types";
 import { Citation, CitationsContext } from "./Citation";
 import { MessageImages } from "./MessageImages";
@@ -37,7 +38,14 @@ type DisplayedMessage = Pick<
  * Assistant messages: left-aligned, no background: the tools Claude used,
  * then the reply as markdown, then the document passages it was based on.
  */
-export function MessageBubble({ message }: { message: DisplayedMessage }) {
+export function MessageBubble({
+  message,
+  streaming = false,
+}: {
+  message: DisplayedMessage;
+  /** The reply is still arriving: a caret blinks at its end */
+  streaming?: boolean;
+}) {
   const isUser = message.role === "user";
 
   return (
@@ -53,7 +61,7 @@ export function MessageBubble({ message }: { message: DisplayedMessage }) {
           )}
         </>
       ) : (
-        <AssistantReply message={message} />
+        <AssistantReply message={message} streaming={streaming} />
       )}
       {/* Details on hover, so they don't crowd the conversation */}
       <div className="flex gap-2 px-1 text-xs text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100">
@@ -65,7 +73,7 @@ export function MessageBubble({ message }: { message: DisplayedMessage }) {
 }
 
 /** A reply whose citations open the matching source underneath it */
-function AssistantReply({ message }: { message: DisplayedMessage }) {
+function AssistantReply({ message, streaming }: { message: DisplayedMessage; streaming: boolean }) {
   const idPrefix = useId();
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [openCards, setOpenCards] = useState<ReadonlySet<number>>(new Set());
@@ -128,7 +136,12 @@ function AssistantReply({ message }: { message: DisplayedMessage }) {
           ))}
         </ol>
       )}
-      <div className="prose prose-sm prose-neutral dark:prose-invert max-w-none break-words prose-pre:overflow-x-auto">
+      <div
+        className={cn(
+          "prose prose-sm prose-neutral dark:prose-invert max-w-none break-words prose-pre:overflow-x-auto",
+          streaming && message.content && "streaming-cursor",
+        )}
+      >
         <CitationsContext value={citations}>
           <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
             {message.content}

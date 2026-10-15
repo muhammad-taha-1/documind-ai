@@ -1,4 +1,4 @@
-import { jsonError, readJsonBody } from "@/lib/api";
+import { jsonError, readJsonBody, withErrorHandling } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { deleteConversation, getConversation, updateConversation } from "@/lib/chat/queries";
 import { firstIssueMessage, updateConversationSchema } from "@/lib/chat/validation";
@@ -6,7 +6,7 @@ import { firstIssueMessage, updateConversationSchema } from "@/lib/chat/validati
 type Context = RouteContext<"/api/chat/conversations/[id]">;
 
 /** GET /api/chat/conversations/:id — a conversation with its documents and messages */
-export async function GET(_request: Request, context: Context) {
+export const GET = withErrorHandling(async (_request: Request, context: Context) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
@@ -19,14 +19,14 @@ export async function GET(_request: Request, context: Context) {
     return jsonError(404, "Conversation not found.");
   }
   return Response.json({ conversation });
-}
+});
 
 /**
  * PATCH /api/chat/conversations/:id — rename a conversation and/or change its documents.
  * Body: `{ title?: string, documentIds?: string[] }` (at least one).
  * Responds with the conversation and its documents as they now are.
  */
-export async function PATCH(request: Request, context: Context) {
+export const PATCH = withErrorHandling(async (request: Request, context: Context) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
@@ -52,10 +52,10 @@ export async function PATCH(request: Request, context: Context) {
     case "updated":
       return Response.json({ conversation: result.conversation, documents: result.documents });
   }
-}
+});
 
 /** DELETE /api/chat/conversations/:id — delete a conversation and its messages */
-export async function DELETE(_request: Request, context: Context) {
+export const DELETE = withErrorHandling(async (_request: Request, context: Context) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
@@ -66,4 +66,4 @@ export async function DELETE(_request: Request, context: Context) {
     return jsonError(404, "Conversation not found.");
   }
   return new Response(null, { status: 204 });
-}
+});

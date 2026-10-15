@@ -56,3 +56,6 @@ export function titleFromFileName(fileName: string): string {
     .trim();
   return (title || "Untitled document").slice(0, MAX_TITLE_LENGTH);
 }
+
+/** Longest search a document's page accepts, in characters (longer ones are cut) */
+export const MAX_PASSAGE_QUERY_LENGTH = 200;

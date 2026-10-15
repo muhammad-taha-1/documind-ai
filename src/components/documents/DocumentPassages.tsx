@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import type { PassagePage } from "@/lib/documents/queries";
 import { highlightMatches } from "@/lib/documents/highlight";
 import { documentPath } from "@/lib/documents/paths";
+import { MAX_PASSAGE_QUERY_LENGTH } from "@/lib/documents/validation";
 import { cn } from "@/lib/utils";
 
 /**
@@ -57,7 +58,7 @@ export function DocumentPassages({
           type="search"
           defaultValue={query}
           placeholder="Search this document…"
-          maxLength={200}
+          maxLength={MAX_PASSAGE_QUERY_LENGTH}
         />
         <button type="submit" className={buttonVariants({ variant: "outline" })}>
           <Search />

@@ -48,6 +48,31 @@ export async function generateEmbeddings(texts: string[], { signal }: EmbeddingO
   return embeddings;
 }
 
+/**
+ * What to tell the user when embedding failed for a reason they (or the
+ * site owner) can act on, or null for anything unexpected. The SDK has
+ * already retried the transient ones by the time they reach here.
+ */
+export function describeEmbeddingError(error: unknown): string | null {
+  // Most specific first: these are all APIError subclasses
+  if (error instanceof OpenAI.RateLimitError) {
+    // A 429 is either a used-up quota (retrying won't help) or plain busyness
+    return error.code === "insufficient_quota"
+      ? "The embedding service's usage quota has run out. Please contact the site owner."
+      : "The embedding service is busy right now. Please retry in a minute.";
+  }
+  if (error instanceof OpenAI.AuthenticationError || error instanceof OpenAI.PermissionDeniedError) {
+    return "The embedding service isn't configured correctly. Please contact the site owner.";
+  }
+  if (error instanceof OpenAI.InternalServerError) {
+    return "The embedding service is having problems right now. Please retry shortly.";
+  }
+  if (error instanceof OpenAI.APIConnectionError) {
+    return "Couldn't reach the embedding service. Please retry.";
+  }
+  return null;
+}
+
 export async function generateEmbedding(text: string, options?: EmbeddingOptions): Promise<number[]> {
   const [embedding] = await generateEmbeddings([text], options);
   return embedding;

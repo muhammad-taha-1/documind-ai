@@ -6,6 +6,7 @@ import type { Session } from "next-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
+import { resetRateLimits } from "@/lib/rate-limit";
 import { documentStorageKey, saveFile } from "@/lib/storage";
 import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
@@ -61,6 +62,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  resetRateLimits();
   scheduled.length = 0;
   generateEmbeddings.mockReset().mockImplementation(async (texts) => texts.map(fakeEmbedding));
   signInAs(ownerId);

@@ -201,7 +201,7 @@ describe("GET /api/chat/conversations", () => {
     const newer = await createConversationRow(ownerId, [], new Date("2026-02-01"));
     await createConversationRow(otherUserId, []);
 
-    const response = await list.GET();
+    const response = await list.GET(new Request("http://localhost/api/chat/conversations"));
 
     expect(response.status).toBe(200);
     const { conversations } = (await response.json()) as { conversations: ConversationSummary[] };
@@ -215,7 +215,7 @@ describe("GET /api/chat/conversations", () => {
 
   it("requires sign-in", async () => {
     signInAs(null);
-    expect((await list.GET()).status).toBe(401);
+    expect((await list.GET(new Request("http://localhost/api/chat/conversations"))).status).toBe(401);
   });
 });
 

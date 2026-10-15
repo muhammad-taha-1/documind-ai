@@ -1,4 +1,4 @@
-import { inlineContentDisposition, jsonError } from "@/lib/api";
+import { inlineContentDisposition, jsonError, withErrorHandling } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { getAttachmentFile } from "@/lib/chat/queries";
 import { readStoredFile } from "@/lib/storage";
@@ -7,7 +7,7 @@ import { readStoredFile } from "@/lib/storage";
  * GET /api/attachments/:id — an image attached to a chat message, for the
  * signed-in user who sent it.
  */
-export async function GET(request: Request, context: RouteContext<"/api/attachments/[id]">) {
+export const GET = withErrorHandling(async (request: Request, context: RouteContext<"/api/attachments/[id]">) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
@@ -51,4 +51,4 @@ export async function GET(request: Request, context: RouteContext<"/api/attachme
       "x-content-type-options": "nosniff",
     },
   });
-}
+});

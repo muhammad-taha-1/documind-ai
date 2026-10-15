@@ -34,7 +34,15 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void }) {
   const [toRename, setToRename] = useState<ConversationSummary | null>(null);
 
   if (conversations.length === 0) {
-    return <p className="px-2 py-1 text-xs text-muted-foreground">No chats yet.</p>;
+    return (
+      <p className="px-2 py-1 text-xs text-muted-foreground">
+        No chats yet.{" "}
+        <Link href="/chat" onClick={onNavigate} className="underline underline-offset-2">
+          Start a new chat
+        </Link>{" "}
+        to begin asking questions.
+      </p>
+    );
   }
 
   return (

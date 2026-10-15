@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { inlineContentDisposition, jsonError } from "@/lib/api";
+import { inlineContentDisposition, jsonError, withErrorHandling } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { getDocumentFile } from "@/lib/documents/queries";
 import { resolveStorageKey } from "@/lib/storage";
@@ -8,7 +8,7 @@ import { resolveStorageKey } from "@/lib/storage";
  * GET /api/documents/:id/file — the uploaded PDF, shown in the browser's viewer.
  * Links can add `#page=N` to open it at a page.
  */
-export async function GET(_request: Request, context: RouteContext<"/api/documents/[id]/file">) {
+export const GET = withErrorHandling(async (_request: Request, context: RouteContext<"/api/documents/[id]/file">) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
@@ -41,4 +41,4 @@ export async function GET(_request: Request, context: RouteContext<"/api/documen
       "cache-control": "private, no-cache",
     },
   });
-}
+});

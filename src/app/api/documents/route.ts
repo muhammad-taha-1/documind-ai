@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { jsonError } from "@/lib/api";
+import { jsonError, withErrorHandling } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db/prisma";
 import { claimDocumentForProcessing, runProcessing } from "@/lib/documents/processing";
 import { documentSummarySelect, listDocuments, toDocumentSummary } from "@/lib/documents/queries";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { deleteFile, documentStorageKey, saveFile } from "@/lib/storage";
 import {
   hasPdfSignature,
@@ -19,21 +20,25 @@ import type { DocumentSummary } from "@/types";
 const MULTIPART_OVERHEAD = 64 * 1024;
 
 /** GET /api/documents — the signed-in user's documents, newest first */
-export async function GET() {
+export const GET = withErrorHandling(async () => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
   }
   return Response.json({ documents: await listDocuments(session.user.id) });
-}
+});
 
 /** POST /api/documents — upload a PDF (multipart/form-data, field "file") */
-export async function POST(request: Request) {
+export const POST = withErrorHandling(async (request: Request) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
   }
   const userId = session.user.id;
+  const limited = enforceRateLimit(userId, "upload");
+  if (limited) {
+    return limited;
+  }
 
   // Route handlers have no body size limit, and request.formData() buffers the
   // whole body in memory — so reject oversized requests from the header before
@@ -121,4 +126,4 @@ export async function POST(request: Request) {
   });
 
   return Response.json({ document }, { status: 201 });
-}
+});

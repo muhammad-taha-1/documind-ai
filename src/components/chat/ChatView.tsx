@@ -178,6 +178,7 @@ export function ChatView({ conversation }: { conversation: ConversationDetail })
 
 const RETRY_MESSAGES = {
   rate_limited: "Claude is handling a lot of requests right now.",
+  overloaded: "Claude is at capacity right now.",
   unavailable: "Claude is temporarily unavailable.",
 } as const;
 

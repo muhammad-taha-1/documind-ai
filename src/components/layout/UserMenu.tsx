@@ -11,6 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 export interface SidebarUser {
   name: string | null;
@@ -29,20 +30,39 @@ function initials(user: SidebarUser): string {
   return (fromName || user.email?.[0] || "?").toUpperCase();
 }
 
-export function UserMenu({ user }: { user: SidebarUser }) {
+/**
+ * The signed-in user, opening a menu with Sign out. `compact` shows just the
+ * avatar, for the icon-only sidebar on tablets.
+ */
+export function UserMenu({ user, compact = false }: { user: SidebarUser; compact?: boolean }) {
   const displayName = user.name ?? user.email ?? "Signed in";
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-md p-1.5 text-left text-sm outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring aria-expanded:bg-sidebar-accent">
+      <DropdownMenuTrigger
+        aria-label={compact ? `Account: ${displayName}` : undefined}
+        title={compact ? displayName : undefined}
+        className={cn(
+          "flex items-center gap-2 rounded-md p-1.5 text-left text-sm outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-sidebar-ring aria-expanded:bg-sidebar-accent",
+          !compact && "w-full",
+        )}
+      >
         <Avatar size="sm">
           {user.image && <AvatarImage src={user.image} alt="" />}
           <AvatarFallback>{initials(user)}</AvatarFallback>
         </Avatar>
-        <span className="min-w-0 flex-1 truncate font-medium">{displayName}</span>
-        <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+        {!compact && (
+          <>
+            <span className="min-w-0 flex-1 truncate font-medium">{displayName}</span>
+            <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+          </>
+        )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="w-(--anchor-width) min-w-56">
+      <DropdownMenuContent
+        side={compact ? "right" : "top"}
+        align={compact ? "end" : "start"}
+        className={cn("min-w-56", !compact && "w-(--anchor-width)")}
+      >
         {user.email && (
           <>
             <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{user.email}</DropdownMenuLabel>

@@ -8,7 +8,7 @@ import { SourceList } from "@/lib/ai/sources";
 import { generateTitle } from "@/lib/ai/title";
 import { createToolbox } from "@/lib/ai/tools";
 import { historyImageBudget, toTurnImages, withHistoryImages } from "@/lib/ai/vision";
-import { checkContentLength, jsonError, type ReadBodyResult, readJsonBody } from "@/lib/api";
+import { checkContentLength, jsonError, type ReadBodyResult, readJsonBody, withErrorHandling } from "@/lib/api";
 import { getSession } from "@/lib/auth";
 import {
   imageTooLargeMessage,
@@ -22,6 +22,7 @@ import { type ExchangeToSave, getChatHistory, saveExchange } from "@/lib/chat/qu
 import { ndjsonLine } from "@/lib/chat/stream";
 import { titleFromMessage } from "@/lib/chat/title";
 import { firstIssueMessage, MAX_MESSAGE_LENGTH, sendMessageSchema } from "@/lib/chat/validation";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { deleteFilesQuietly } from "@/lib/storage";
 import type { ChatStreamEvent } from "@/types";
 
@@ -150,10 +151,16 @@ async function saveExchangeWithImages(
  * while Claude answers), and a conversation that has grown past its context
  * budget is summarized in the background once the response has finished.
  */
-export async function POST(request: Request) {
+export const POST = withErrorHandling(async (request: Request) => {
   const session = await getSession();
   if (!session) {
     return jsonError(401, "You must be signed in.");
+  }
+  const userId = session.user.id;
+  // Before reading the body: images take real work to check
+  const limited = enforceRateLimit(userId, "chat");
+  if (limited) {
+    return limited;
   }
 
   const read = await readSendBody(request);
@@ -165,7 +172,6 @@ export async function POST(request: Request) {
     return jsonError(400, firstIssueMessage(parsed.error));
   }
   const { conversationId, message } = parsed.data;
-  const userId = session.user.id;
 
   const history = await getChatHistory(userId, conversationId);
   if (!history) {
@@ -329,4 +335,4 @@ export async function POST(request: Request) {
       "X-Accel-Buffering": "no",
     },
   });
-}
+});

@@ -2,13 +2,22 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import OpenAI from "openai";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentStatus } from "@/generated/prisma/enums";
 import { prisma } from "@/lib/db/prisma";
 import { fakeEmbedding } from "@/test/embeddings";
 import { makePdf } from "@/test/pdf";
 import { chunkPages } from "./chunker";
-import { claimDocumentForProcessing, NO_TEXT_MESSAGE, runProcessing } from "./processing";
+import {
+  claimDocumentForProcessing,
+  INTERRUPTED_MESSAGE,
+  MISSING_FILE_MESSAGE,
+  NO_TEXT_MESSAGE,
+  recoverInterruptedProcessing,
+  runProcessing,
+  storeChunks,
+} from "./processing";
 import { documentStorageKey, saveFile } from "@/lib/storage";
 
 const generateEmbeddings = vi.hoisted(() => vi.fn<(texts: string[]) => Promise<number[][]>>());
@@ -138,7 +147,23 @@ describe("runProcessing", () => {
     expect(await countEmbedded(id)).toBe(1);
   });
 
-  it("records embedding failures as ERROR with a generic message", async () => {
+  it("explains embedding failures the user or site owner can act on", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    generateEmbeddings.mockRejectedValueOnce(
+      new OpenAI.RateLimitError(429, { code: "insufficient_quota" }, "quota", new Headers()),
+    );
+    const id = await createDocument(makePdf(["Some text"]));
+
+    await runProcessing(id);
+
+    expect(await findDocument(id)).toMatchObject({
+      status: "ERROR",
+      errorMessage: "The embedding service's usage quota has run out. Please contact the site owner.",
+    });
+    consoleError.mockRestore();
+  });
+
+  it("records unexpected embedding failures as ERROR with a generic message", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const apiError = new Error("429 Rate limit reached");
     generateEmbeddings.mockRejectedValueOnce(apiError);
@@ -179,18 +204,30 @@ describe("runProcessing", () => {
     expect(new Set(chunks.map((c) => c.pageNumber))).toEqual(new Set([1, 2, 3]));
   });
 
-  it("stores more chunks than fit in one INSERT's bind parameters", async () => {
-    // Postgres allows 65,535 bind parameters per statement; at 5 per chunk
-    // row, 15,000 chunks only succeed if Prisma batches the insert
-    const id = await createDocument(null);
+  it("stores a huge document's chunks in batches, in order, replacing any old ones", async () => {
+    // Several batches, and past what one INSERT's 65,535 bind parameters allow
+    // (5 per row). One createMany this big made Prisma run its parts
+    // concurrently on the transaction's connection, which pg warns about.
+    const warnings: Error[] = [];
+    const onWarning = (warning: Error) => warnings.push(warning);
+    process.on("warning", onWarning);
+    const id = await createDocument(null, "PROCESSING");
+    await prisma.documentChunk.create({ data: { documentId: id, chunkIndex: 0, content: "stale" } });
     const text = Array.from({ length: 15_000 }, (_, i) => `Sentence ${i}.`).join("\n\n");
     const chunks = chunkPages([{ pageNumber: 1, text }], { chunkSize: 20, chunkOverlap: 0 });
     expect(chunks.length).toBe(15_000);
 
-    await prisma.documentChunk.createMany({
-      data: chunks.map((chunk) => ({ ...chunk, documentId: id })),
-    });
+    await storeChunks(id, chunks, 7);
+
+    process.off("warning", onWarning);
     expect(await prisma.documentChunk.count({ where: { documentId: id } })).toBe(15_000);
+    const [first, last] = await Promise.all([
+      prisma.documentChunk.findFirstOrThrow({ where: { documentId: id }, orderBy: { chunkIndex: "asc" } }),
+      prisma.documentChunk.findFirstOrThrow({ where: { documentId: id }, orderBy: { chunkIndex: "desc" } }),
+    ]);
+    expect([first.content, last.content, last.chunkIndex]).toEqual(["Sentence 0.", "Sentence 14999.", 14_999]);
+    expect(await findDocument(id)).toMatchObject({ status: "EMBEDDING", pageCount: 7, totalChunks: 15_000 });
+    expect(warnings.map((warning) => warning.message)).toEqual([]);
   });
 
   it("replaces the chunks from an earlier attempt on retry", async () => {
@@ -224,16 +261,13 @@ describe("runProcessing", () => {
     expect(document.errorMessage).toMatch(/may be damaged/);
   });
 
-  it("logs unexpected failures and shows a generic message", async () => {
+  it("logs a missing file and tells the user how to fix it", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const id = await createDocument(null); // row exists, file doesn't
 
     await runProcessing(id);
 
-    expect(await findDocument(id)).toMatchObject({
-      status: "ERROR",
-      errorMessage: "Processing failed. Please try again.",
-    });
+    expect(await findDocument(id)).toMatchObject({ status: "ERROR", errorMessage: MISSING_FILE_MESSAGE });
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(id), expect.objectContaining({ code: "ENOENT" }));
     consoleError.mockRestore();
   });
@@ -242,5 +276,26 @@ describe("runProcessing", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(runProcessing(randomUUID())).resolves.toBeUndefined();
     consoleError.mockRestore();
+  });
+});
+
+describe("recoverInterruptedProcessing", () => {
+  it("marks documents left in progress by a restart as failed, so they can be retried", async () => {
+    const stuck = await Promise.all(
+      (["UPLOADING", "PROCESSING", "EMBEDDING"] as const).map((status) => createDocument(null, status)),
+    );
+    const ready = await createDocument(null, "READY");
+    const failed = await createDocument(null, "ERROR");
+
+    // Scoped to this test's user: the database is shared with the app
+    expect(await recoverInterruptedProcessing({ userIds: [ownerId] })).toBe(3);
+
+    for (const id of stuck) {
+      expect(await findDocument(id)).toMatchObject({ status: "ERROR", errorMessage: INTERRUPTED_MESSAGE });
+      // ...which is exactly what Retry accepts
+      expect(await claimDocumentForProcessing(id, ownerId)).toBe("claimed");
+    }
+    expect((await findDocument(ready)).status).toBe("READY");
+    expect((await findDocument(failed)).errorMessage).toBeNull();
   });
 });

@@ -1,10 +1,35 @@
+import { unstable_rethrow } from "next/navigation";
+
 /** Error body shape for every API route: `{ error: "human-readable message" }` */
 export interface ApiError {
   error: string;
 }
 
-export function jsonError(status: number, message: string): Response {
-  return Response.json({ error: message } satisfies ApiError, { status });
+export function jsonError(status: number, message: string, headers?: HeadersInit): Response {
+  return Response.json({ error: message } satisfies ApiError, { status, headers });
+}
+
+export const INTERNAL_ERROR_MESSAGE = "Something went wrong on our side. Please try again.";
+
+/**
+ * Wraps a route handler so an unexpected failure (the database is down, a
+ * bug) is logged and answered with the usual `{ error }` JSON and a 500,
+ * instead of an empty response the browser can't explain to the user.
+ * Problems the handler expects are still its own responses (400, 404, ...).
+ */
+export function withErrorHandling<Rest extends unknown[]>(
+  handler: (request: Request, ...rest: Rest) => Promise<Response>,
+): (request: Request, ...rest: Rest) => Promise<Response> {
+  return async (request, ...rest) => {
+    try {
+      return await handler(request, ...rest);
+    } catch (error) {
+      // redirect(), notFound() and friends work by throwing; they're not failures
+      unstable_rethrow(error);
+      console.error(`Unhandled error in ${request.method} ${new URL(request.url).pathname}`, error);
+      return jsonError(500, INTERNAL_ERROR_MESSAGE);
+    }
+  };
 }
 
 const DEFAULT_MAX_JSON_BYTES = 16 * 1024;
