@@ -156,7 +156,11 @@ export function ChatInput({
             onClick={() => fileInput.current?.click()}
             disabled={!canAttach}
             aria-label="Attach images"
-            title={canAttach ? "Attach images (PNG, JPEG, GIF or WebP, up to 5 MB)" : `Up to ${MAX_IMAGES_PER_MESSAGE} images`}
+            title={
+              canAttach
+                ? "Attach images (PNG, JPEG, GIF or WebP, up to 5 MB)"
+                : `Up to ${MAX_IMAGES_PER_MESSAGE} images`
+            }
             className="rounded-xl text-muted-foreground"
           >
             <Paperclip />
@@ -175,13 +179,7 @@ export function ChatInput({
             rows={1}
             className="field-sizing-content max-h-[calc(4lh+1rem)] min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-sm outline-none placeholder:text-muted-foreground"
           />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={!canSend}
-            aria-label="Send message"
-            className="rounded-xl"
-          >
+          <Button type="submit" size="icon" disabled={!canSend} aria-label="Send message" className="rounded-xl">
             <ArrowUp />
           </Button>
         </div>

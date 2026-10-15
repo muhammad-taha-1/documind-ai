@@ -108,10 +108,11 @@ export async function withHistoryImages(turns: readonly HistoryTurn[], budget: I
     console.info(`Sending ${chosen.size} of ${total} earlier images; the older ones are placeholders`);
   }
   return Promise.all(
-    turns.map(async ({ role, content, images }): Promise<ChatTurn> =>
-      images.length === 0
-        ? { role, content }
-        : { role, content, images: await Promise.all(images.map((image) => loadImage(image, chosen.has(image.id)))) },
+    turns.map(
+      async ({ role, content, images }): Promise<ChatTurn> =>
+        images.length === 0
+          ? { role, content }
+          : { role, content, images: await Promise.all(images.map((image) => loadImage(image, chosen.has(image.id)))) },
     ),
   );
 }

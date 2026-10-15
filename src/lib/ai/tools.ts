@@ -54,7 +54,7 @@ export const TOOLS = [
   {
     name: "get_page_content",
     description:
-      "Read one page of a document. Use it when the user asks about a specific page (\"what's on page 4?\"), or " +
+      'Read one page of a document. Use it when the user asks about a specific page ("what\'s on page 4?"), or ' +
       "when you need the text around a passage you were given. Returns the passages covering that page, numbered " +
       "as sources you can cite; the first may begin on the page before.",
     input_schema: {

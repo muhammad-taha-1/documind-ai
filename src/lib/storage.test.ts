@@ -25,12 +25,9 @@ describe("document storage", () => {
     expect(resolveStorageKey("user1/doc1.pdf")).toBe(path.join(root, "user1", "doc1.pdf"));
   });
 
-  it.each(["../outside.pdf", "user1/../../outside.pdf", "..", ""])(
-    "refuses keys that escape the root: %j",
-    (key) => {
-      expect(() => resolveStorageKey(key)).toThrow(/escapes/);
-    },
-  );
+  it.each(["../outside.pdf", "user1/../../outside.pdf", "..", ""])("refuses keys that escape the root: %j", (key) => {
+    expect(() => resolveStorageKey(key)).toThrow(/escapes/);
+  });
 
   it("saves, refuses to overwrite, and deletes files", async () => {
     const key = "user1/doc2.pdf";

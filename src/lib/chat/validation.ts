@@ -12,10 +12,7 @@ export const MAX_TITLE_LENGTH = 100;
 const documentIdsSchema = z
   .array(z.string().min(1).max(100))
   .min(1, "Select at least one document.")
-  .max(
-    MAX_DOCUMENTS_PER_CONVERSATION,
-    `You can chat with up to ${MAX_DOCUMENTS_PER_CONVERSATION} documents at once.`,
-  )
+  .max(MAX_DOCUMENTS_PER_CONVERSATION, `You can chat with up to ${MAX_DOCUMENTS_PER_CONVERSATION} documents at once.`)
   // Duplicates would make the ownership count check fail for valid IDs
   .transform((ids) => [...new Set(ids)]);
 

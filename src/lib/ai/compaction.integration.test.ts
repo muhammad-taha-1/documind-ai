@@ -29,7 +29,13 @@ function summaryResponse(content: string) {
       input_tokens: 0,
       output_tokens: 0,
       iterations: [
-        { type: "compaction", input_tokens: 900, output_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        {
+          type: "compaction",
+          input_tokens: 900,
+          output_tokens: 120,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       ],
     },
   };
@@ -82,9 +88,7 @@ describe("compactConversation", () => {
       compaction: { type: "summarize", instructions: COMPACTION_INSTRUCTIONS },
     });
     // Only what's being replaced: everything the summary covers, nothing it doesn't
-    expect(request.messages).toEqual(
-      messages.slice(0, 6).map(({ role, content }) => ({ role, content })),
-    );
+    expect(request.messages).toEqual(messages.slice(0, 6).map(({ role, content }) => ({ role, content })));
 
     const conversation = await prisma.conversation.findUniqueOrThrow({ where: { id } });
     // Stored exactly as returned, signature and all
@@ -189,7 +193,11 @@ describe("compactConversation", () => {
   it("keeps the conversation as it was when no summary comes back", async () => {
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { id } = await createConversation(10);
-    create.mockResolvedValueOnce({ stop_reason: "max_tokens", content: [], usage: { input_tokens: 0, output_tokens: 0 } });
+    create.mockResolvedValueOnce({
+      stop_reason: "max_tokens",
+      content: [],
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
 
     expect(await compactConversation(id)).toBe("no_summary");
 

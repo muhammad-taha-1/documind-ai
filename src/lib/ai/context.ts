@@ -62,10 +62,7 @@ export function fitHistory<Turn extends Pick<ChatTurn, "role" | "content">>(
  * The split always falls just before a user message, so the kept part opens
  * with a question, as a conversation must.
  */
-export function findCompactionCut(
-  messages: readonly { role: string }[],
-  keep = KEEP_RECENT_EXCHANGES,
-): number | null {
+export function findCompactionCut(messages: readonly { role: string }[], keep = KEEP_RECENT_EXCHANGES): number | null {
   let usersSeen = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user" && ++usersSeen === keep) {

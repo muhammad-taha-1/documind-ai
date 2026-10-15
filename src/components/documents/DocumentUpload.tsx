@@ -98,9 +98,7 @@ export function DocumentUpload({ onUploaded }: { onUploaded: (document: Document
           </div>
         ) : (
           <>
-            <CloudUpload
-              className={`size-8 ${isDragging ? "text-primary" : "text-muted-foreground"}`}
-            />
+            <CloudUpload className={`size-8 ${isDragging ? "text-primary" : "text-muted-foreground"}`} />
             <p className="text-sm font-medium">
               {isDragging ? "Drop to upload" : "Drag & drop a PDF here, or click to browse"}
             </p>

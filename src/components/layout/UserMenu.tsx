@@ -45,9 +45,7 @@ export function UserMenu({ user }: { user: SidebarUser }) {
       <DropdownMenuContent side="top" align="start" className="w-(--anchor-width) min-w-56">
         {user.email && (
           <>
-            <DropdownMenuLabel className="truncate font-normal text-muted-foreground">
-              {user.email}
-            </DropdownMenuLabel>
+            <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{user.email}</DropdownMenuLabel>
             <DropdownMenuSeparator />
           </>
         )}

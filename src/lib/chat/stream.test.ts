@@ -35,9 +35,7 @@ describe("readNdjson", () => {
   it("reassembles a multi-byte character split across chunks", async () => {
     const bytes = new TextEncoder().encode(ndjsonLine({ text: "héllo 👋" }));
     const split = bytes.indexOf(0xf0) + 2; // inside the 4-byte emoji
-    expect(await collect(streamOf([bytes.slice(0, split), bytes.slice(split)]))).toEqual([
-      { text: "héllo 👋" },
-    ]);
+    expect(await collect(streamOf([bytes.slice(0, split), bytes.slice(split)]))).toEqual([{ text: "héllo 👋" }]);
   });
 
   it("reads a final line without a trailing newline and skips blank lines", async () => {

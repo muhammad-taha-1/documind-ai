@@ -60,17 +60,14 @@ async function runScheduled() {
 const USAGE = { inputTokens: 30, outputTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
 /** What Claude is sent for a chat with no searchable documents */
-const withoutDocuments = (question: string) =>
-  buildRAGPrompt(question, { mode: "NO_DOCUMENTS", sources: [] }, []);
+const withoutDocuments = (question: string) => buildRAGPrompt(question, { mode: "NO_DOCUMENTS", sources: [] }, []);
 
 let ownerId: string;
 let otherUserId: string;
 let uploadRoot: string;
 
 function signInAs(userId: string | null) {
-  getSession.mockResolvedValue(
-    userId ? { user: { id: userId }, expires: "2099-01-01T00:00:00.000Z" } : null,
-  );
+  getSession.mockResolvedValue(userId ? { user: { id: userId }, expires: "2099-01-01T00:00:00.000Z" } : null);
 }
 
 function chatRequest(body: unknown, signal?: AbortSignal) {
@@ -140,11 +137,7 @@ async function createConversation(userId: string, documentIds: string[] = []) {
 }
 
 /** A READY document whose chunks have the given text and embeddings */
-async function createDocument(
-  userId: string,
-  title: string,
-  chunks: { content: string; vector: number[] }[],
-) {
+async function createDocument(userId: string, title: string, chunks: { content: string; vector: number[] }[]) {
   const document = await prisma.document.create({
     data: { title, fileName: "d.pdf", fileSize: 1, filePath: "unused", status: "READY", userId },
   });
@@ -241,16 +234,12 @@ describe("POST /api/chat", () => {
     expect(generateTitle).toHaveBeenCalledWith("Hi Claude", expect.anything());
 
     const saved = await findMessages(id);
-    expect(
-      saved.map((m) => [m.role, m.content, m.model, m.inputTokens, m.outputTokens, m.contextTokens]),
-    ).toEqual([
+    expect(saved.map((m) => [m.role, m.content, m.model, m.inputTokens, m.outputTokens, m.contextTokens])).toEqual([
       ["user", "Hi Claude", null, null, null, null],
       ["assistant", "Hello there!", "claude-test", 30, 12, 30],
     ]);
     // The message is sent trimmed, as the only turn
-    expect(generateChatReply.mock.calls[0][0]).toEqual([
-      { role: "user", content: withoutDocuments("Hi Claude") },
-    ]);
+    expect(generateChatReply.mock.calls[0][0]).toEqual([{ role: "user", content: withoutDocuments("Hi Claude") }]);
   });
 
   it("sends earlier messages as plain history and keeps the title after the first exchange", async () => {
@@ -260,9 +249,7 @@ describe("POST /api/chat", () => {
     const afterFirst = await prisma.conversation.findUniqueOrThrow({ where: { id } });
 
     generateChatReply.mockImplementation(replyWith(["Second answer"]));
-    const events = await readEvents(
-      await POST(chatRequest({ conversationId: id, message: "Second question" })),
-    );
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Second question" })));
 
     expect(generateChatReply.mock.calls[1][0]).toEqual([
       // Saved as asked: earlier questions don't carry their passages again
@@ -483,9 +470,7 @@ async function createSearchableDocument(userId = ownerId) {
       vector: makeVector({ 1: 1 }),
     })),
   ];
-  expect(chunks.reduce((total, chunk) => total + chunk.content.length, 0)).toBeGreaterThan(
-    FULL_TEXT_MAX_CHARACTERS,
-  );
+  expect(chunks.reduce((total, chunk) => total + chunk.content.length, 0)).toBeGreaterThan(FULL_TEXT_MAX_CHARACTERS);
   return createDocument(userId, "Guide", chunks);
 }
 
@@ -533,9 +518,7 @@ describe("POST /api/chat document retrieval", () => {
     expect(saved[0]).toMatchObject({ content: "Is it?", retrieval: null, sources: [] });
     expect(saved[1].retrieval).toBe("MATCHED");
     expect(saved[1].sources.map((source) => source.chunkId)).toEqual(document.chunkIds.slice(0, 2));
-    expect(console.info).toHaveBeenCalledWith(
-      `Retrieval in ${id}: MATCHED, 2 sources, best similarity 1.000`,
-    );
+    expect(console.info).toHaveBeenCalledWith(`Retrieval in ${id}: MATCHED, 2 sources, best similarity 1.000`);
   });
 
   it("sends small documents in full, without a search", async () => {
@@ -546,9 +529,7 @@ describe("POST /api/chat document retrieval", () => {
     const id = await createConversation(ownerId, [resume.id]);
     generateChatReply.mockImplementation(replyWith(["Looks good."]));
 
-    const events = await readEvents(
-      await POST(chatRequest({ conversationId: id, message: "Is this resume ok?" })),
-    );
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Is this resume ok?" })));
 
     expect(generateEmbedding).not.toHaveBeenCalled();
     expect(lastPrompt()).toContain(
@@ -589,9 +570,7 @@ describe("POST /api/chat document retrieval", () => {
     generateEmbedding.mockResolvedValue(makeVector({ 9: 1 }));
     generateChatReply.mockImplementation(replyWith(["Your documents don't cover that."]));
 
-    const events = await readEvents(
-      await POST(chatRequest({ conversationId: id, message: "Cake recipe?" })),
-    );
+    const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Cake recipe?" })));
 
     expect(lastPrompt()).toBe(
       buildRAGPrompt("Cake recipe?", { mode: "NO_MATCH", sources: [] }, [
@@ -624,9 +603,7 @@ describe("POST /api/chat document retrieval", () => {
 
     const events = await readEvents(await POST(chatRequest({ conversationId: id, message: "Hi" })));
 
-    expect(events).toEqual([
-      { type: "error", error: "Couldn't search your documents. Please try again." },
-    ]);
+    expect(events).toEqual([{ type: "error", error: "Couldn't search your documents. Please try again." }]);
     expect(generateChatReply).not.toHaveBeenCalled();
     expect(await findMessages(id)).toEqual([]);
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(id), expect.any(Error));
@@ -720,13 +697,12 @@ describe("POST /api/chat tools", () => {
     expect(events.find((event) => event.type === "tool")).toMatchObject({
       call: {
         label: 'Read page 3 of "Notes"',
-        output: "[Source 2 — Notes, page 2] (already shown above)\n\n---\n\n[Source 3 — Notes, page 3] (already shown above)",
+        output:
+          "[Source 2 — Notes, page 2] (already shown above)\n\n---\n\n[Source 3 — Notes, page 3] (already shown above)",
       },
     });
     // The chat's document list told Claude the ID and page count
-    expect(generateChatReply.mock.calls[0][0].at(-1)!.content).toContain(
-      `- Notes (id: ${document.id}, 3 pages)`,
-    );
+    expect(generateChatReply.mock.calls[0][0].at(-1)!.content).toContain(`- Notes (id: ${document.id}, 3 pages)`);
   });
 
   it("looks up document details from the database", async () => {
@@ -798,8 +774,7 @@ describe("POST /api/chat with images", () => {
   }
 
   /** Files stored under the user's images folder */
-  const storedImages = (userId: string) =>
-    readdir(resolveStorageKey(`${userId}/images`)).catch(() => [] as string[]);
+  const storedImages = (userId: string) => readdir(resolveStorageKey(`${userId}/images`)).catch(() => [] as string[]);
 
   const findAttachments = (conversationId: string) =>
     prisma.messageAttachment.findMany({ where: { message: { conversationId } }, orderBy: { position: "asc" } });
@@ -936,9 +911,19 @@ describe("POST /api/chat with images", () => {
   });
 
   const tiff = async () =>
-    new File([new Uint8Array(await sharp(await (await png(10, 10)).arrayBuffer()).tiff().toBuffer())], "scan.png", {
-      type: "image/png",
-    });
+    new File(
+      [
+        new Uint8Array(
+          await sharp(await (await png(10, 10)).arrayBuffer())
+            .tiff()
+            .toBuffer(),
+        ),
+      ],
+      "scan.png",
+      {
+        type: "image/png",
+      },
+    );
 
   it.each([
     [

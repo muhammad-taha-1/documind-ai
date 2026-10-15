@@ -11,13 +11,9 @@ export function makePdf(pages: (string | null)[]): Uint8Array<ArrayBuffer> {
 
   for (const text of pages) {
     // `'` moves to the next row (14pt leading) and draws the string
-    const lines = text
-      ?.split("\n")
-      .map((line) => `(${line.replace(/[\\()]/g, (char) => `\\${char}`)})`);
+    const lines = text?.split("\n").map((line) => `(${line.replace(/[\\()]/g, (char) => `\\${char}`)})`);
     const content =
-      lines === undefined
-        ? ""
-        : `BT /F1 12 Tf 14 TL 72 734 Td ${lines.map((line) => `${line} '`).join(" ")} ET`;
+      lines === undefined ? "" : `BT /F1 12 Tf 14 TL 72 734 Td ${lines.map((line) => `${line} '`).join(" ")} ET`;
     const pageRef = objects.length + 1;
     kids.push(`${pageRef} 0 R`);
     objects.push(

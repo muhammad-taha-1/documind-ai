@@ -194,8 +194,7 @@ function RetryNotice({ retry }: { retry: NonNullable<PendingExchange["retry"]> }
     <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
       <Hourglass className="size-3.5 shrink-0" />
       <span>
-        {RETRY_MESSAGES[retry.reason]}{" "}
-        {/* The ticking countdown is for the eye; screen readers hear it once */}
+        {RETRY_MESSAGES[retry.reason]} {/* The ticking countdown is for the eye; screen readers hear it once */}
         <span aria-hidden>{seconds > 0 ? `Trying again in ${seconds}s…` : "Trying again…"}</span>
         <span className="sr-only">Trying again shortly.</span>
       </span>

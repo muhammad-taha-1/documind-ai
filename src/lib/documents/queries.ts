@@ -34,10 +34,7 @@ export async function listDocuments(userId: string): Promise<DocumentSummary[]> 
 }
 
 /** One of the user's documents, or null if they have no such document. */
-export async function getDocumentSummary(
-  userId: string,
-  documentId: string,
-): Promise<DocumentSummary | null> {
+export async function getDocumentSummary(userId: string, documentId: string): Promise<DocumentSummary | null> {
   const row = await prisma.document.findFirst({
     where: { id: documentId, userId },
     select: documentSummarySelect,
@@ -71,11 +68,7 @@ const pageChunkSelect = {
  * end of a chunk that started earlier: the last such chunk is included too.
  * Similarity is null because nothing was searched.
  */
-export async function getPageChunks(
-  userId: string,
-  documentId: string,
-  pageNumber: number,
-): Promise<SourceChunk[]> {
+export async function getPageChunks(userId: string, documentId: string, pageNumber: number): Promise<SourceChunk[]> {
   const where = { documentId, document: { userId } };
   const before = await prisma.documentChunk.findFirst({
     where: { ...where, pageNumber: { lt: pageNumber } },

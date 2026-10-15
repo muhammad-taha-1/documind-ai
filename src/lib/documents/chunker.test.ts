@@ -4,8 +4,7 @@ import { chunkPages, type PageText, type TextChunk } from "./chunker";
 const page = (pageNumber: number, text: string): PageText => ({ pageNumber, text });
 
 /** "w0 w1 w2 …" — every word unique, so a chunk's position in the text is unambiguous. */
-const words = (count: number, offset = 0) =>
-  Array.from({ length: count }, (_, i) => `w${i + offset}`).join(" ");
+const words = (count: number, offset = 0) => Array.from({ length: count }, (_, i) => `w${i + offset}`).join(" ");
 
 /**
  * Checks chunks cover `text` in order with nothing dropped: each chunk is a
@@ -18,9 +17,7 @@ function expectFullCoverage(chunks: TextChunk[], text: string) {
   for (const chunk of chunks) {
     const start = text.indexOf(chunk.content, previousStart);
     expect(start, `chunk ${chunk.chunkIndex} is not part of the text`).toBeGreaterThanOrEqual(0);
-    expect(text.slice(previousEnd, start).trim(), `text lost before chunk ${chunk.chunkIndex}`).toBe(
-      "",
-    );
+    expect(text.slice(previousEnd, start).trim(), `text lost before chunk ${chunk.chunkIndex}`).toBe("");
     previousStart = start;
     previousEnd = Math.max(previousEnd, start + chunk.content.length);
   }
@@ -54,11 +51,7 @@ describe("chunkPages", () => {
       chunkSize: 20,
       chunkOverlap: 0,
     });
-    expect(chunks.map((c) => c.content)).toEqual([
-      "One two three.",
-      "Four five six!",
-      "Seven eight nine?",
-    ]);
+    expect(chunks.map((c) => c.content)).toEqual(["One two three.", "Four five six!", "Seven eight nine?"]);
   });
 
   it("splits at line breaks when there's no punctuation, like a bullet list", () => {
@@ -136,10 +129,10 @@ describe("chunkPages", () => {
     // Words w0–w19 are on page 1, w100–w119 on page 3, w200–w219 on page 4. Each
     // page fits in a chunk but no two do, so every chunk starts on a page break
     // and its overlap reaches back onto the previous page.
-    const chunks = chunkPages(
-      [page(1, words(20, 0)), page(2, ""), page(3, words(20, 100)), page(4, words(20, 200))],
-      { chunkSize: 100, chunkOverlap: 30 },
-    );
+    const chunks = chunkPages([page(1, words(20, 0)), page(2, ""), page(3, words(20, 100)), page(4, words(20, 200))], {
+      chunkSize: 100,
+      chunkOverlap: 30,
+    });
     const pageOfWord = (word: string) => {
       const n = Number(word.slice(1));
       return n < 100 ? 1 : n < 200 ? 3 : 4;

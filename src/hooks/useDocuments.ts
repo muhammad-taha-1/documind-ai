@@ -66,9 +66,7 @@ export function useDocuments(initialDocuments: DocumentSummary[]) {
     localVersion.current++;
     setDocuments((current) =>
       current.map((document) =>
-        document.id === documentId
-          ? { ...document, status: "PROCESSING", errorMessage: null }
-          : document,
+        document.id === documentId ? { ...document, status: "PROCESSING", errorMessage: null } : document,
       ),
     );
   }, []);

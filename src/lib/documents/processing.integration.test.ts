@@ -22,10 +22,7 @@ let ownerId: string;
 let otherUserId: string;
 
 /** Creates a document row, and its file on disk unless `bytes` is null. */
-async function createDocument(
-  bytes: Uint8Array | null,
-  status: DocumentStatus = "UPLOADING",
-): Promise<string> {
+async function createDocument(bytes: Uint8Array | null, status: DocumentStatus = "UPLOADING"): Promise<string> {
   const id = randomUUID();
   const filePath = documentStorageKey(ownerId, id);
   if (bytes) await saveFile(filePath, bytes);
@@ -237,10 +234,7 @@ describe("runProcessing", () => {
       status: "ERROR",
       errorMessage: "Processing failed. Please try again.",
     });
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining(id),
-      expect.objectContaining({ code: "ENOENT" }),
-    );
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining(id), expect.objectContaining({ code: "ENOENT" }));
     consoleError.mockRestore();
   });
 

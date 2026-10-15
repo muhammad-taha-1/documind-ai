@@ -63,9 +63,7 @@ describe("readSourceNumbers", () => {
 
 describe("remarkCitations", () => {
   const render = (markdown: string) =>
-    renderToStaticMarkup(
-      createElement(ReactMarkdown, { remarkPlugins: [remarkGfm, remarkCitations] }, markdown),
-    );
+    renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm, remarkCitations] }, markdown));
 
   it("renders citations as <cite> elements carrying their numbers", () => {
     expect(render("Compute [Source 1] and storage [Source 2, 3].")).toBe(
@@ -74,9 +72,7 @@ describe("remarkCitations", () => {
   });
 
   it("finds citations inside formatting, lists and tables", () => {
-    const html = render(
-      "- **Bold [Source 1]**\n\n| a | b |\n| - | - |\n| x [Source 2] | y |",
-    );
+    const html = render("- **Bold [Source 1]**\n\n| a | b |\n| - | - |\n| x [Source 2] | y |");
     expect(html).toContain('<strong>Bold <cite data-sources="1">[Source 1]</cite></strong>');
     expect(html).toContain('<td>x <cite data-sources="2">[Source 2]</cite></td>');
   });

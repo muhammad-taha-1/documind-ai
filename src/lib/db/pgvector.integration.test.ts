@@ -3,12 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EMBEDDING_DIMENSIONS } from "@/lib/ai/embeddings";
 import { makeVector } from "@/test/embeddings";
 import { prisma } from "./prisma";
-import {
-  listSearchableChunks,
-  measureSearchableText,
-  searchSimilarChunks,
-  toVectorLiteral,
-} from "./vectors";
+import { listSearchableChunks, measureSearchableText, searchSimilarChunks, toVectorLiteral } from "./vectors";
 
 /**
  * Phase 2 integration test: proves pgvector works end-to-end through Prisma 7's
@@ -59,9 +54,11 @@ describe("pgvector via Prisma", () => {
     otherDocId = otherDoc.id;
 
     const makeChunk = async (documentId: string, chunkIndex: number) =>
-      (await prisma.documentChunk.create({
-        data: { documentId, chunkIndex, content: `chunk ${chunkIndex}` },
-      })).id;
+      (
+        await prisma.documentChunk.create({
+          data: { documentId, chunkIndex, content: `chunk ${chunkIndex}` },
+        })
+      ).id;
 
     chunkIds.exact = await makeChunk(ownerDocId, 0);
     chunkIds.partial = await makeChunk(ownerDocId, 1);
@@ -111,11 +108,7 @@ describe("pgvector via Prisma", () => {
   it("returns chunks ordered by cosine similarity with correct scores", async () => {
     const results = await searchSimilarChunks(makeVector({ 0: 1 }), [ownerDocId], ownerId);
 
-    expect(results.map((r) => r.id)).toEqual([
-      chunkIds.exact,
-      chunkIds.partial,
-      chunkIds.unrelated,
-    ]);
+    expect(results.map((r) => r.id)).toEqual([chunkIds.exact, chunkIds.partial, chunkIds.unrelated]);
     expect(results[0].similarity).toBeCloseTo(1, 5);
     expect(results[1].similarity).toBeCloseTo(Math.SQRT1_2, 5);
     expect(results[2].similarity).toBeCloseTo(0, 5);
@@ -181,13 +174,7 @@ describe("pgvector via Prisma", () => {
     try {
       const chunks = await listSearchableChunks([second.id, ownerDocId, otherDocId], ownerId);
 
-      expect(chunks.map((chunk) => chunk.content)).toEqual([
-        "second 0",
-        "second 1",
-        "chunk 0",
-        "chunk 1",
-        "chunk 2",
-      ]);
+      expect(chunks.map((chunk) => chunk.content)).toEqual(["second 0", "second 1", "chunk 0", "chunk 1", "chunk 2"]);
       expect(chunks[0]).toEqual({
         id: expect.any(String),
         content: "second 0",

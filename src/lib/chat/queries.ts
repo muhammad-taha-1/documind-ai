@@ -157,10 +157,7 @@ export async function listConversations(userId: string): Promise<ConversationSum
 }
 
 /** A conversation with its documents and messages, or null if the user has no such conversation. */
-export async function getConversation(
-  userId: string,
-  conversationId: string,
-): Promise<ConversationDetail | null> {
+export async function getConversation(userId: string, conversationId: string): Promise<ConversationDetail | null> {
   const conversation = await prisma.conversation.findFirst({
     where: { id: conversationId, userId },
     select: {
@@ -207,10 +204,7 @@ export type CreateConversationResult =
  * the user's — the IDs come from the client, and a conversation must never
  * give access to someone else's document.
  */
-export async function createConversation(
-  userId: string,
-  documentIds: string[],
-): Promise<CreateConversationResult> {
+export async function createConversation(userId: string, documentIds: string[]): Promise<CreateConversationResult> {
   const owned = await prisma.document.count({ where: { id: { in: documentIds }, userId } });
   if (owned !== documentIds.length) {
     return { status: "documents_not_found" };
@@ -305,11 +299,7 @@ const historyImageSelect = {
   select: { id: true, fileName: true, mediaType: true, storageKey: true, byteSize: true },
 } as const satisfies Prisma.Message$attachmentsArgs;
 
-function toHistoryTurn(message: {
-  role: string;
-  content: string;
-  attachments: HistoryTurn["images"];
-}): HistoryTurn {
+function toHistoryTurn(message: { role: string; content: string; attachments: HistoryTurn["images"] }): HistoryTurn {
   // The queries only select user and assistant messages
   return { role: message.role as HistoryTurn["role"], content: message.content, images: message.attachments };
 }
@@ -452,9 +442,7 @@ export async function saveExchange(exchange: ExchangeToSave) {
   const { conversationId, user, assistant, title } = exchange;
   // Messages are ordered by createdAt, so the answer must sort after its
   // question even if both land in the same millisecond
-  const assistantCreatedAt = new Date(
-    Math.max(assistant.createdAt.getTime(), user.createdAt.getTime() + 1),
-  );
+  const assistantCreatedAt = new Date(Math.max(assistant.createdAt.getTime(), user.createdAt.getTime() + 1));
 
   const [userRow, assistantRow, conversationRow] = await prisma.$transaction(async (tx) => {
     // A document can be deleted or reprocessed while the reply streams, taking
@@ -498,9 +486,7 @@ export async function saveExchange(exchange: ExchangeToSave) {
         sources: {
           // Numbered before filtering: the reply cites them by these numbers
           create: assistant.sources.flatMap((source, i) =>
-            remainingIds.has(source.id)
-              ? [{ position: i + 1, chunkId: source.id, similarity: source.similarity }]
-              : [],
+            remainingIds.has(source.id) ? [{ position: i + 1, chunkId: source.id, similarity: source.similarity }] : [],
           ),
         },
       },

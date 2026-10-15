@@ -14,9 +14,7 @@ export function DocumentList({
       <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed px-6 py-12 text-center">
         <Files className="size-8 text-muted-foreground" />
         <p className="font-medium">No documents yet</p>
-        <p className="text-sm text-muted-foreground">
-          Upload a PDF above to start chatting with it.
-        </p>
+        <p className="text-sm text-muted-foreground">Upload a PDF above to start chatting with it.</p>
       </div>
     );
   }

@@ -3,13 +3,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { SignInButton } from "@/components/auth/SignInButton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getSession } from "@/lib/auth";
 import { getSafeRedirect } from "@/lib/safe-redirect";
 
@@ -19,8 +13,7 @@ export const metadata: Metadata = {
 
 // NextAuth sends sign-in failures here as ?error=<code> (pages.error in src/lib/auth.ts)
 const ERROR_MESSAGES: Record<string, string> = {
-  OAuthAccountNotLinked:
-    "That email is already linked to a different sign-in method.",
+  OAuthAccountNotLinked: "That email is already linked to a different sign-in method.",
   AccessDenied: "Access was denied. Please try again.",
   Configuration: "Sign-in is misconfigured on the server. Check the auth environment variables.",
 };
@@ -35,8 +28,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
     redirect(redirectTo);
   }
 
-  const errorMessage =
-    typeof error === "string" ? (ERROR_MESSAGES[error] ?? DEFAULT_ERROR) : null;
+  const errorMessage = typeof error === "string" ? (ERROR_MESSAGES[error] ?? DEFAULT_ERROR) : null;
 
   return (
     <main className="flex flex-1 items-center justify-center bg-muted/40 px-4 py-16">
@@ -46,9 +38,7 @@ export default async function LoginPage(props: PageProps<"/login">) {
             <FileText className="size-5" />
           </div>
           <CardTitle className="text-xl">Welcome to DocuMind</CardTitle>
-          <CardDescription>
-            Chat with your documents. Sign in to get started.
-          </CardDescription>
+          <CardDescription>Chat with your documents. Sign in to get started.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           {errorMessage && (

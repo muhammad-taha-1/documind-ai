@@ -29,8 +29,7 @@ export function hasPdfSignature(bytes: Uint8Array): boolean {
 /** Client-side pre-check. Returns an error message, or null if the file looks OK. */
 export function validateSelectedFile(file: Pick<File, "name" | "size" | "type">): string | null {
   // Some systems report an empty MIME type for PDFs, so fall back to the extension
-  const looksLikePdf =
-    file.type === PDF_MIME_TYPE || (file.type === "" && /\.pdf$/i.test(file.name));
+  const looksLikePdf = file.type === PDF_MIME_TYPE || (file.type === "" && /\.pdf$/i.test(file.name));
   if (!looksLikePdf) {
     return "Only PDF files are supported.";
   }

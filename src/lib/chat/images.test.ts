@@ -132,9 +132,13 @@ describe("normalizeImage", () => {
   });
 
   it("goes by the content, not the name: other formats are turned away", async () => {
-    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script></svg>');
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script></svg>',
+    );
     expect(await normalizeImage(svg, "logo.png")).toEqual({ ok: false, reason: "unsupported" });
-    const tiff = await sharp(await solid(10, 10, "png")).tiff().toBuffer();
+    const tiff = await sharp(await solid(10, 10, "png"))
+      .tiff()
+      .toBuffer();
     expect(await normalizeImage(tiff, "scan.jpg")).toEqual({ ok: false, reason: "unsupported" });
   });
 
@@ -173,7 +177,14 @@ describe("storeImages", () => {
     const attachments = await storeImages("user-1", [image("a.gif", "image/png"), image("b.jpeg", "image/jpeg")]);
 
     expect(attachments).toEqual([
-      expect.objectContaining({ position: 1, fileName: "a.gif", mediaType: "image/png", width: 10, height: 20, byteSize: 5 }),
+      expect.objectContaining({
+        position: 1,
+        fileName: "a.gif",
+        mediaType: "image/png",
+        width: 10,
+        height: 20,
+        byteSize: 5,
+      }),
       expect.objectContaining({ position: 2, fileName: "b.jpeg", mediaType: "image/jpeg", byteSize: 6 }),
     ]);
     expect(attachments[0].storageKey).toBe(`user-1/images/${attachments[0].id}.png`);

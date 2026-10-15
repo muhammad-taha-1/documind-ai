@@ -17,9 +17,7 @@ export function DashboardProviders({
 }) {
   return (
     <DocumentsProvider initialDocuments={initialDocuments}>
-      <ConversationsProvider initialConversations={initialConversations}>
-        {children}
-      </ConversationsProvider>
+      <ConversationsProvider initialConversations={initialConversations}>{children}</ConversationsProvider>
     </DocumentsProvider>
   );
 }

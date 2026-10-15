@@ -6,8 +6,7 @@ import { embedDocumentChunks } from "./embedding";
 import { PdfParseError, parsePdf } from "./parser";
 import { resolveStorageKey } from "@/lib/storage";
 
-export const NO_TEXT_MESSAGE =
-  "No extractable text — this PDF may be image-only (for example, a scan).";
+export const NO_TEXT_MESSAGE = "No extractable text — this PDF may be image-only (for example, a scan).";
 const GENERIC_FAILURE_MESSAGE = "Processing failed. Please try again.";
 
 // Processing can start from a fresh upload or as a retry after a failure
@@ -22,10 +21,7 @@ export type ClaimResult = "claimed" | "busy" | "not_found";
  * Retry, say) can't both start the pipeline — only one sees `count === 1`.
  * Including `userId` in the WHERE clause doubles as the ownership check.
  */
-export async function claimDocumentForProcessing(
-  documentId: string,
-  userId: string,
-): Promise<ClaimResult> {
+export async function claimDocumentForProcessing(documentId: string, userId: string): Promise<ClaimResult> {
   const { count } = await prisma.document.updateMany({
     where: { id: documentId, userId, status: { in: STARTABLE_STATUSES } },
     data: { status: DocumentStatus.PROCESSING, errorMessage: null },

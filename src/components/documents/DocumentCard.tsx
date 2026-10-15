@@ -16,8 +16,7 @@ export function DocumentCard({
   onRetry: (documentId: string) => Promise<void>;
 }) {
   const details = [
-    document.pageCount !== null &&
-      `${document.pageCount} ${document.pageCount === 1 ? "page" : "pages"}`,
+    document.pageCount !== null && `${document.pageCount} ${document.pageCount === 1 ? "page" : "pages"}`,
     formatBytes(document.fileSize),
   ].filter(Boolean);
 
@@ -46,9 +45,7 @@ export function DocumentCard({
           </p>
           {document.status === "ERROR" && (
             <div className="relative mt-1 grid gap-2">
-              {document.errorMessage && (
-                <p className="text-xs text-destructive">{document.errorMessage}</p>
-              )}
+              {document.errorMessage && <p className="text-xs text-destructive">{document.errorMessage}</p>}
               <RetryButton onRetry={() => onRetry(document.id)} />
             </div>
           )}

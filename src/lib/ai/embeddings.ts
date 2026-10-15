@@ -28,17 +28,11 @@ export interface EmbeddingOptions {
  * Embeds several texts in one request. The API accepts up to 2,048 inputs
  * (and 300k tokens) per request; callers batch well below that.
  */
-export async function generateEmbeddings(
-  texts: string[],
-  { signal }: EmbeddingOptions = {},
-): Promise<number[][]> {
+export async function generateEmbeddings(texts: string[], { signal }: EmbeddingOptions = {}): Promise<number[][]> {
   if (texts.length === 0) {
     return [];
   }
-  const response = await getClient().embeddings.create(
-    { model: EMBEDDING_MODEL, input: texts },
-    { signal },
-  );
+  const response = await getClient().embeddings.create({ model: EMBEDDING_MODEL, input: texts }, { signal });
 
   // Each result carries the index of its input, so match on that rather than
   // relying on the response order
@@ -48,9 +42,7 @@ export async function generateEmbeddings(
   }
   for (const embedding of embeddings) {
     if (embedding.length !== EMBEDDING_DIMENSIONS) {
-      throw new Error(
-        `Expected ${EMBEDDING_DIMENSIONS}-dimension embeddings, got ${embedding.length}`,
-      );
+      throw new Error(`Expected ${EMBEDDING_DIMENSIONS}-dimension embeddings, got ${embedding.length}`);
     }
   }
   return embeddings;

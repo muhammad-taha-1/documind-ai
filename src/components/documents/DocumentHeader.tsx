@@ -43,8 +43,7 @@ export function DocumentHeader({ document: rendered }: { document: DocumentDetai
     document.fileName,
     document.pageCount !== null && `${document.pageCount} ${document.pageCount === 1 ? "page" : "pages"}`,
     formatBytes(document.fileSize),
-    document.status === "READY" &&
-      `${document.totalChunks} ${document.totalChunks === 1 ? "passage" : "passages"}`,
+    document.status === "READY" && `${document.totalChunks} ${document.totalChunks === 1 ? "passage" : "passages"}`,
   ].filter(Boolean);
 
   return (

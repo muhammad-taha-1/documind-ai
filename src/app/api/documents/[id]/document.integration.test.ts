@@ -22,9 +22,7 @@ let ownerId: string;
 let otherUserId: string;
 
 function signInAs(userId: string | null) {
-  getSession.mockResolvedValue(
-    userId ? { user: { id: userId }, expires: "2099-01-01T00:00:00.000Z" } : null,
-  );
+  getSession.mockResolvedValue(userId ? { user: { id: userId }, expires: "2099-01-01T00:00:00.000Z" } : null);
 }
 
 const context = (id: string) => ({ params: Promise.resolve({ id }) });

@@ -51,7 +51,9 @@ function toolRound(content: ContentBlock[], events: StreamEvent[] = []) {
 }
 
 /** A toolbox whose tools answer from a script, recording what they were asked */
-function fakeToolbox(run: Toolbox["run"] = async (_name, input) => ({ output: `result for ${JSON.stringify(input)}`, isError: false })) {
+function fakeToolbox(
+  run: Toolbox["run"] = async (_name, input) => ({ output: `result for ${JSON.stringify(input)}`, isError: false }),
+) {
   return {
     definitions: [{ name: "search_documents", description: "Search", input_schema: { type: "object" as const } }],
     describe: (name: string, input: unknown) => `${name} ${JSON.stringify(input)}`,
@@ -241,10 +243,7 @@ describe("generateChatReply with tools", () => {
       status: "done",
       output: 'result for {"query":"load balancers"}',
     };
-    expect(onToolCall.mock.calls.map(([call]) => call)).toEqual([
-      { ...done, status: "running", output: null },
-      done,
-    ]);
+    expect(onToolCall.mock.calls.map(([call]) => call)).toEqual([{ ...done, status: "running", output: null }, done]);
     expect(reply).toEqual({
       text: "ALBs work at layer 7.",
       model: "test-model",
@@ -552,10 +551,17 @@ describe("generateChatReply when Claude is busy", () => {
 
 describe("retryDelay", () => {
   it("uses the wait the API asked for", () => {
-    expect(retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after-ms": "1500.2" })), 0)).toBe(1501);
-    expect(retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after": "3" })), 0)).toBe(3000);
+    expect(
+      retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after-ms": "1500.2" })), 0),
+    ).toBe(1501);
+    expect(retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after": "3" })), 0)).toBe(
+      3000,
+    );
     const inFiveSeconds = new Date(Date.now() + 5000).toUTCString();
-    const fromDate = retryDelay(new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after": inFiveSeconds })), 0);
+    const fromDate = retryDelay(
+      new Anthropic.RateLimitError(429, undefined, "", new Headers({ "retry-after": inFiveSeconds })),
+      0,
+    );
     // HTTP dates have whole-second precision
     expect(fromDate).toBeGreaterThan(3000);
     expect(fromDate).toBeLessThanOrEqual(5000);

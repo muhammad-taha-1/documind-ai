@@ -3,9 +3,7 @@ import { inlineContentDisposition } from "./api";
 
 describe("inlineContentDisposition", () => {
   it("names a plain file as is", () => {
-    expect(inlineContentDisposition("report.pdf")).toBe(
-      `inline; filename="report.pdf"; filename*=UTF-8''report.pdf`,
-    );
+    expect(inlineContentDisposition("report.pdf")).toBe(`inline; filename="report.pdf"; filename*=UTF-8''report.pdf`);
   });
 
   it("keeps quotes and backslashes out of the quoted fallback", () => {

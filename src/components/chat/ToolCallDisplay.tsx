@@ -23,12 +23,8 @@ export function ToolCallDisplay({ call }: { call: ToolCall }) {
         <span className="min-w-0 flex-1 truncate" title={call.label}>
           {call.label}
         </span>
-        {call.status === "running" && (
-          <LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-label="Running" />
-        )}
-        {call.status === "failed" && (
-          <CircleAlert className="size-3.5 shrink-0 text-destructive" aria-label="Failed" />
-        )}
+        {call.status === "running" && <LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-label="Running" />}
+        {call.status === "failed" && <CircleAlert className="size-3.5 shrink-0 text-destructive" aria-label="Failed" />}
       </summary>
       <div className="grid gap-2 border-t border-dashed px-3 py-2.5">
         <section className="grid gap-1">

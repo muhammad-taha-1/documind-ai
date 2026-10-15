@@ -19,9 +19,7 @@ let otherUserId: string;
 let uploadRoot: string;
 
 function signInAs(userId: string | null) {
-  getSession.mockResolvedValue(
-    userId ? { user: { id: userId }, expires: "2099-01-01T00:00:00.000Z" } : null,
-  );
+  getSession.mockResolvedValue(userId ? { user: { id: userId }, expires: "2099-01-01T00:00:00.000Z" } : null);
 }
 
 /** A JSON POST with the Content-Length a browser would send. */
@@ -39,8 +37,7 @@ function createRequest(body: unknown, rawBody = JSON.stringify(body)) {
 }
 
 const itemContext = (id: string) => ({ params: Promise.resolve({ id }) });
-const getOne = (id: string) =>
-  item.GET(new Request(`http://localhost/api/chat/conversations/${id}`), itemContext(id));
+const getOne = (id: string) => item.GET(new Request(`http://localhost/api/chat/conversations/${id}`), itemContext(id));
 const patchOne = (id: string, body: unknown) => {
   const raw = JSON.stringify(body);
   return item.PATCH(
@@ -56,10 +53,7 @@ const patchOne = (id: string, body: unknown) => {
   );
 };
 const deleteOne = (id: string) =>
-  item.DELETE(
-    new Request(`http://localhost/api/chat/conversations/${id}`, { method: "DELETE" }),
-    itemContext(id),
-  );
+  item.DELETE(new Request(`http://localhost/api/chat/conversations/${id}`, { method: "DELETE" }), itemContext(id));
 
 async function createDocument(userId: string, title = "Doc"): Promise<string> {
   const document = await prisma.document.create({
@@ -321,9 +315,21 @@ describe("GET /api/chat/conversations/:id", () => {
     };
     await prisma.message.createMany({
       data: [
-        { conversationId: id, role: "assistant", content: "A", toolCalls: [call], createdAt: new Date("2026-01-01T10:00Z") },
+        {
+          conversationId: id,
+          role: "assistant",
+          content: "A",
+          toolCalls: [call],
+          createdAt: new Date("2026-01-01T10:00Z"),
+        },
         // e.g. written by an older version of the app
-        { conversationId: id, role: "assistant", content: "B", toolCalls: [{ tool: "x" }], createdAt: new Date("2026-01-01T10:01Z") },
+        {
+          conversationId: id,
+          role: "assistant",
+          content: "B",
+          toolCalls: [{ tool: "x" }],
+          createdAt: new Date("2026-01-01T10:01Z"),
+        },
       ],
     });
 

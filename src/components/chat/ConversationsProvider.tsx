@@ -31,10 +31,7 @@ export function ConversationsProvider({
   const [conversations, setConversations] = useState(initialConversations);
 
   const upsertConversation = useCallback((conversation: ConversationSummary) => {
-    setConversations((current) => [
-      conversation,
-      ...current.filter((existing) => existing.id !== conversation.id),
-    ]);
+    setConversations((current) => [conversation, ...current.filter((existing) => existing.id !== conversation.id)]);
   }, []);
 
   const replaceConversation = useCallback((conversation: ConversationSummary) => {

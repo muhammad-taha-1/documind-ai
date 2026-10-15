@@ -7,12 +7,13 @@ interface FakeEmbedding {
 }
 
 const { create, constructed } = vi.hoisted(() => ({
-  create: vi.fn<
-    (
-      body: { model: string; input: string[] },
-      options: { signal?: AbortSignal },
-    ) => Promise<{ data: FakeEmbedding[] }>
-  >(),
+  create:
+    vi.fn<
+      (
+        body: { model: string; input: string[] },
+        options: { signal?: AbortSignal },
+      ) => Promise<{ data: FakeEmbedding[] }>
+    >(),
   constructed: [] as unknown[],
 }));
 
@@ -46,10 +47,7 @@ describe("generateEmbeddings", () => {
 
     expect(await generateEmbeddings(["first", "second"])).toEqual(vectors);
     expect(create).toHaveBeenCalledOnce();
-    expect(create).toHaveBeenCalledWith(
-      { model: EMBEDDING_MODEL, input: ["first", "second"] },
-      { signal: undefined },
-    );
+    expect(create).toHaveBeenCalledWith({ model: EMBEDDING_MODEL, input: ["first", "second"] }, { signal: undefined });
   });
 
   it("matches results to inputs by index, not response order", async () => {
@@ -102,9 +100,6 @@ describe("generateEmbedding", () => {
     respondWith([vector]);
 
     expect(await generateEmbedding("question")).toEqual(vector);
-    expect(create).toHaveBeenCalledWith(
-      { model: EMBEDDING_MODEL, input: ["question"] },
-      { signal: undefined },
-    );
+    expect(create).toHaveBeenCalledWith({ model: EMBEDDING_MODEL, input: ["question"] }, { signal: undefined });
   });
 });

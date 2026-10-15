@@ -11,10 +11,7 @@ const BASE = "http://internal.invalid";
  * redirect). Parsing with URL also catches tricks like "//evil.example" and
  * "/\evil.example", which browsers treat as absolute URLs.
  */
-export function getSafeRedirect(
-  value: string | string[] | undefined,
-  fallback: string = DEFAULT_REDIRECT,
-): string {
+export function getSafeRedirect(value: string | string[] | undefined, fallback: string = DEFAULT_REDIRECT): string {
   if (typeof value !== "string" || !value.startsWith("/")) {
     return fallback;
   }

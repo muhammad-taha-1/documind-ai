@@ -47,8 +47,7 @@ export function EditDocumentsDialog({
     }
   }
 
-  const unchanged =
-    selected.size === current.length && current.every((document) => selected.has(document.id));
+  const unchanged = selected.size === current.length && current.every((document) => selected.has(document.id));
 
   function handleOpenChange(next: boolean) {
     if (!pending) onOpenChange(next);

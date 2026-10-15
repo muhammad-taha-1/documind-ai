@@ -51,11 +51,7 @@ export function MessageSources({
         </p>
       )}
       {sources.length > 0 && (
-        <details
-          className="group/sources"
-          open={open}
-          onToggle={(event) => onOpenChange(event.currentTarget.open)}
-        >
+        <details className="group/sources" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
             <ChevronRight className="size-3.5 transition-transform group-open/sources:rotate-90" />
             {sources.length} {sources.length === 1 ? "source" : "sources"}

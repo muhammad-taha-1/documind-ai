@@ -42,7 +42,10 @@ export async function parsePdf(data: Uint8Array): Promise<ParsedDocument> {
     return {
       // Built from pages rather than result.text, which inserts "-- 1 of 3 --"
       // markers between pages — noise that would end up inside chunks
-      text: pages.map((page) => page.text).filter(Boolean).join("\n\n"),
+      text: pages
+        .map((page) => page.text)
+        .filter(Boolean)
+        .join("\n\n"),
       pageCount: result.total,
       pages,
     };

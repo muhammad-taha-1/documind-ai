@@ -41,8 +41,8 @@ export function DocumentPassages({
           Passages
         </h2>
         <p className="text-sm text-muted-foreground">
-          The document is split into these passages. Claude searches them to answer your questions, and
-          each source in a chat is one of them.
+          The document is split into these passages. Claude searches them to answer your questions, and each source in a
+          chat is one of them.
         </p>
       </div>
 

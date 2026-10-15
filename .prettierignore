@@ -1,0 +1,14 @@
+# Generated
+src/generated/
+prisma/migrations/
+next-env.d.ts
+package-lock.json
+
+# shadcn/ui components, kept exactly as the shadcn CLI writes them
+src/components/ui/
+
+# Written by other tools, or not code
+AGENTS.md
+CLAUDE.md
+documind-ai-spec.md
+uploads/

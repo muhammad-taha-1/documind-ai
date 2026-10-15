@@ -17,7 +17,14 @@ import {
 const MB = 1024 * 1024;
 
 function stored(id: string, byteSize = 1000, overrides: Partial<StoredImage> = {}): StoredImage {
-  return { id, fileName: `${id}.png`, mediaType: "image/png", storageKey: `user/images/${id}.png`, byteSize, ...overrides };
+  return {
+    id,
+    fileName: `${id}.png`,
+    mediaType: "image/png",
+    storageKey: `user/images/${id}.png`,
+    byteSize,
+    ...overrides,
+  };
 }
 
 const user = (images: StoredImage[], content = "q"): HistoryTurn => ({ role: "user", content, images });
@@ -52,7 +59,12 @@ describe("chooseHistoryImages", () => {
   });
 
   it("stops at the first image that doesn't fit the bytes, even if an older one would", () => {
-    const turns = [user([stored("small", 10)]), assistant(), user([stored("big", 6 * MB)]), user([stored("new", 3 * MB)])];
+    const turns = [
+      user([stored("small", 10)]),
+      assistant(),
+      user([stored("big", 6 * MB)]),
+      user([stored("new", 3 * MB)]),
+    ];
     // 3 MB + 6 MB as base64 is 12 MB
     const chosen = chooseHistoryImages(turns, { images: 20, bytes: 8 * MB });
     expect(chosen).toEqual(new Set(["new"]));

@@ -457,9 +457,7 @@ export async function generateChatReply(
     }
 
     const content = contentToSendBack(message.content);
-    const calls = content.filter(
-      (block): block is Anthropic.Beta.BetaToolUseBlock => block.type === "tool_use",
-    );
+    const calls = content.filter((block): block is Anthropic.Beta.BetaToolUseBlock => block.type === "tool_use");
     // Claude can ask for several tools at once; run them together. Every call
     // needs its result, all in one message, or the next request is rejected.
     const results = await Promise.all(calls.map((call) => runTool(call, toolbox)));

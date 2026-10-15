@@ -18,7 +18,8 @@ interface CitationsContextValue {
 /** Provided by each reply, so its citations link to its own sources */
 export const CitationsContext = createContext<CitationsContextValue | null>(null);
 
-const MARKER = "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 align-[0.15em] text-[0.65rem] leading-none font-semibold tabular-nums no-underline";
+const MARKER =
+  "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 align-[0.15em] text-[0.65rem] leading-none font-semibold tabular-nums no-underline";
 
 /**
  * A citation in a reply, "[Source 2, 3]", shown as one small marker per

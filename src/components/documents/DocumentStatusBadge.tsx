@@ -15,8 +15,7 @@ const STATUS_BADGES: Record<
     label: "Ready",
     variant: "outline",
     busy: false,
-    className:
-      "border-transparent bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400",
+    className: "border-transparent bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400",
   },
   ERROR: { label: "Error", variant: "destructive", busy: false },
 };

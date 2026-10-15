@@ -77,9 +77,7 @@ export function chunkPages(
     throw new RangeError(`chunkSize must be a positive integer, got ${chunkSize}`);
   }
   if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0 || chunkOverlap >= chunkSize) {
-    throw new RangeError(
-      `chunkOverlap must be an integer from 0 to chunkSize - 1, got ${chunkOverlap}`,
-    );
+    throw new RangeError(`chunkOverlap must be an integer from 0 to chunkSize - 1, got ${chunkOverlap}`);
   }
 
   // Combine the pages, remembering the offset each one starts at
@@ -95,8 +93,9 @@ export function chunkPages(
 
   // Split into pieces that each fit, then pack neighbouring pieces back
   // together so chunks are as full as possible
-  const spans = mergeSpans(splitToFit(text, { start: 0, end: text.length }, chunkSize), chunkSize)
-    .filter((span) => /\S/.test(text.slice(span.start, span.end)));
+  const spans = mergeSpans(splitToFit(text, { start: 0, end: text.length }, chunkSize), chunkSize).filter((span) =>
+    /\S/.test(text.slice(span.start, span.end)),
+  );
 
   let pageIndex = 0;
   return spans.map((span, chunkIndex) => {
@@ -106,8 +105,7 @@ export function chunkPages(
       pageIndex++;
     }
 
-    const start =
-      chunkIndex === 0 ? span.start : overlapStart(text, span, spans[chunkIndex - 1], chunkOverlap);
+    const start = chunkIndex === 0 ? span.start : overlapStart(text, span, spans[chunkIndex - 1], chunkOverlap);
     const content = text.slice(start, span.end).trim();
     return {
       content,
@@ -141,9 +139,7 @@ function splitToFit(text: string, span: Span, maxSize: number, level = 0): Span[
   if (!separator) {
     return hardSplit(text, span, maxSize);
   }
-  return splitAt(text, span, separator).flatMap((piece) =>
-    splitToFit(text, piece, maxSize, level + 1),
-  );
+  return splitAt(text, span, separator).flatMap((piece) => splitToFit(text, piece, maxSize, level + 1));
 }
 
 /** Splits after each match of `separator`, keeping the separator with the text before it. */

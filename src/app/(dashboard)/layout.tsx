@@ -19,10 +19,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
   }
   const userId = session.user.id;
 
-  const [documents, conversations] = await Promise.all([
-    listDocuments(userId),
-    listConversations(userId),
-  ]);
+  const [documents, conversations] = await Promise.all([listDocuments(userId), listConversations(userId)]);
   const user = {
     name: session.user.name ?? null,
     email: session.user.email ?? null,

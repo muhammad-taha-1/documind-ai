@@ -49,10 +49,7 @@ export async function measureSearchableText(
  * then each document's chunks from first to last. `similarity` is null
  * because nothing was compared — the caller sends all of it.
  */
-export async function listSearchableChunks(
-  documentIds: readonly string[],
-  userId: string,
-): Promise<SourceChunk[]> {
+export async function listSearchableChunks(documentIds: readonly string[], userId: string): Promise<SourceChunk[]> {
   if (documentIds.length === 0) {
     return [];
   }

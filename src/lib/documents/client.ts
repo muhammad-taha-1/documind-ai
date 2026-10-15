@@ -9,10 +9,7 @@ const GENERIC_ERROR = "Upload failed. Please try again.";
  * Uses XMLHttpRequest rather than fetch because fetch has no upload-progress
  * events in browsers. Rejects with an Error whose message is safe to show.
  */
-export function uploadDocument(
-  file: File,
-  onProgress: (percent: number) => void,
-): Promise<DocumentSummary> {
+export function uploadDocument(file: File, onProgress: (percent: number) => void): Promise<DocumentSummary> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/documents");

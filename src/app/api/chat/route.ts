@@ -32,8 +32,7 @@ const MAX_BODY_BYTES = MAX_MESSAGE_LENGTH * 4 + 1024;
 // boundaries and headers around them
 const MAX_MULTIPART_BYTES = MAX_IMAGES_PER_MESSAGE * MAX_IMAGE_SIZE + MAX_BODY_BYTES + 64 * 1024;
 
-const REFUSED_MESSAGE =
-  "Claude can't help with that request. Try rephrasing it — your message wasn't saved.";
+const REFUSED_MESSAGE = "Claude can't help with that request. Try rephrasing it — your message wasn't saved.";
 const EMPTY_REPLY_MESSAGE = "Claude didn't return a reply. Please try again.";
 const RETRIEVAL_FAILED_MESSAGE = "Couldn't search your documents. Please try again.";
 
@@ -211,9 +210,7 @@ export async function POST(request: Request) {
 
       // Named alongside the reply, so the title costs no waiting time. Never
       // rejects; null means fall back to the message itself.
-      const title = history.isEmpty
-        ? generateTitle(message, { images: turnImages, signal: generation.signal })
-        : null;
+      const title = history.isEmpty ? generateTitle(message, { images: turnImages, signal: generation.signal }) : null;
 
       try {
         const documentIds = history.documents.map((document) => document.id);

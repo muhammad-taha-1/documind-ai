@@ -221,8 +221,7 @@ function DeleteConversationDialog({
         <DialogHeader>
           <DialogTitle>Delete this chat?</DialogTitle>
           <DialogDescription>
-            “{conversation?.title}” and all its messages will be permanently deleted. Your documents
-            aren’t affected.
+            “{conversation?.title}” and all its messages will be permanently deleted. Your documents aren’t affected.
           </DialogDescription>
         </DialogHeader>
         {error && <p className="text-sm text-destructive">{error}</p>}
